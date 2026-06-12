@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 import config
 
 FONT_PATH = config.resource_path(os.path.join("assets", "fonts", "neodgm.ttf"))
+HANDWRITTEN_FONT_PATH = config.resource_path(os.path.join("assets", "fonts", "handdrawn.ttf"))
 
 THEMES = {
     "black_on_white": {
@@ -47,6 +48,16 @@ THEMES = {
         "use_background_image": True,
         "scanline_alpha": 0,
         "glass": True,
+    },
+    "crayon_sketch": {
+        "bg": (253, 251, 247),
+        "text": (44, 44, 44),
+        "dim": (124, 114, 103),
+        "bright": (44, 44, 44),
+        "accent": (233, 30, 99),
+        "use_background_image": False,
+        "scanline_alpha": 0,
+        "handdrawn": True,
     },
 }
 
@@ -93,6 +104,7 @@ class TuiCanvas:
         self.rows, self.cols = rows, cols
         self.palette = palette
         self.panels = []
+        self.hlines = []
         self.grid = [[None] * cols for _ in range(rows)]  # (char, fg, bg|None)
 
     def put(self, r: int, c: int, text: str, fg=None, bg=None):
@@ -125,6 +137,7 @@ class TuiCanvas:
 
     def hline(self, r: int, c0: int, w: int, fg=None):
         fg = fg or self.palette["dim"]
+        self.hlines.append((r, c0, w, fg))
         self.put(r, c0, "├" + "─" * (w - 2) + "┤", fg)
 
 
@@ -240,7 +253,12 @@ def _line_height(font) -> int:
 
 def _draw_panel(draw: ImageDraw.ImageDraw, rect_px, title: str, palette: dict, font, title_font):
     x0, y0, x1, y1 = rect_px
-    if palette.get("glass"):
+    if palette.get("handdrawn"):
+        _draw_wobbly_line(draw, x0, y0, x1, y0, palette["dim"], width=3)
+        _draw_wobbly_line(draw, x1, y0, x1, y1, palette["dim"], width=3)
+        _draw_wobbly_line(draw, x1, y1, x0, y1, palette["dim"], width=3)
+        _draw_wobbly_line(draw, x0, y1, x0, y0, palette["dim"], width=3)
+    elif palette.get("glass"):
         shadow = palette.get("panel_shadow", (20, 35, 60, 42))
         fill = palette.get("panel_fill", (255, 255, 255, 118))
         outline = palette.get("panel_outline", (255, 255, 255, 210))
@@ -352,8 +370,9 @@ def _render_custom_wallpaper(meals: dict, timetable: dict, cfg: dict, size, pale
     draw = ImageDraw.Draw(img, "RGBA")
     font_size = max(12, round(H / 54))
     title_size = max(14, round(font_size * 1.15))
-    font = ImageFont.truetype(FONT_PATH, font_size)
-    title_font = ImageFont.truetype(FONT_PATH, title_size)
+    font_path = HANDWRITTEN_FONT_PATH if palette.get("handdrawn") and os.path.exists(HANDWRITTEN_FONT_PATH) else FONT_PATH
+    font = ImageFont.truetype(font_path, font_size)
+    title_font = ImageFont.truetype(font_path, title_size)
     custom = cfg.get("custom_wallpaper") or config.default_custom_wallpaper()
     layout = custom.get("layout", config.default_custom_wallpaper()["layout"])
     _draw_prompt(draw, _rect_px(layout.get("prompt", config.DEFAULT_CUSTOM_WALLPAPER["layout"]["prompt"]), size),
@@ -435,6 +454,64 @@ def _build_screen(canvas: TuiCanvas, meals: dict, timetable: dict, cfg: dict, co
         canvas.put(bottom, c0, "─ ! 오프라인: 마지막으로 받은 정보를 표시 중 ─", palette["dim"])
 
 
+def _draw_wobbly_line(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, fill, width=3, jitter=1.5):
+    import random
+    if len(fill) == 3:
+        fill = (fill[0], fill[1], fill[2], 255)
+    
+    # We draw 3 sketchy paths overlapping slightly
+    for offset_scale in [0.4, 0.7, 1.0]:
+        alpha = int(100 + 100 * offset_scale)
+        stroke_color = (fill[0], fill[1], fill[2], alpha)
+        
+        length = ((x1 - x0)**2 + (y1 - y0)**2)**0.5
+        if length < 2:
+            continue
+        
+        num_segments = max(1, int(length / 10))
+        dx = (x1 - x0) / num_segments
+        dy = (y1 - y0) / num_segments
+        
+        points = [(x0, y0)]
+        for i in range(1, num_segments):
+            px = x0 + i * dx + random.uniform(-jitter, jitter) * offset_scale
+            py = y0 + i * dy + random.uniform(-jitter, jitter) * offset_scale
+            points.append((px, py))
+        points.append((x1, y1))
+        
+        for j in range(len(points) - 1):
+            draw.line([points[j], points[j+1]], fill=stroke_color, width=width)
+
+
+def _paint_handdrawn_panels(img: Image.Image, canvas: TuiCanvas, x_off: int, y_off: int,
+                            cell_w: int, cell_h: int) -> None:
+    draw = ImageDraw.Draw(img, "RGBA")
+    
+    # Draw wobbly box borders
+    for r0, c0, h, w in canvas.panels:
+        x0 = x_off + c0 * cell_w + cell_w // 2
+        y0 = y_off + r0 * cell_h + cell_h // 2
+        x1 = x_off + (c0 + w - 1) * cell_w + cell_w // 2
+        y1 = y_off + (r0 + h - 1) * cell_h + cell_h // 2
+        
+        # Top line
+        _draw_wobbly_line(draw, x0, y0, x1, y0, canvas.palette["dim"], width=3)
+        # Right line
+        _draw_wobbly_line(draw, x1, y0, x1, y1, canvas.palette["dim"], width=3)
+        # Bottom line
+        _draw_wobbly_line(draw, x1, y1, x0, y1, canvas.palette["dim"], width=3)
+        # Left line
+        _draw_wobbly_line(draw, x0, y1, x0, y0, canvas.palette["dim"], width=3)
+
+    # Draw wobbly horizontal lines
+    for r, c0, w, fg in canvas.hlines:
+        x0 = x_off + c0 * cell_w + cell_w // 2
+        y0 = y_off + r * cell_h + cell_h // 2
+        x1 = x_off + (c0 + w - 1) * cell_w + cell_w // 2
+        y1 = y0
+        _draw_wobbly_line(draw, x0, y0, x1, y1, fg, width=2)
+
+
 def _paint_glass_panels(img: Image.Image, canvas: TuiCanvas, x_off: int, y_off: int,
                         cell_w: int, cell_h: int) -> None:
     palette = canvas.palette
@@ -471,7 +548,8 @@ def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -
 
     # 픽셀 폰트는 16px 배수에서 또렷하다
     font_size = 16 * max(1, round(H / 1080 * 2))
-    font = ImageFont.truetype(FONT_PATH, font_size)
+    font_path = HANDWRITTEN_FONT_PATH if palette.get("handdrawn") and os.path.exists(HANDWRITTEN_FONT_PATH) else FONT_PATH
+    font = ImageFont.truetype(font_path, font_size)
     cell_w = round(font.getlength("A"))
     cell_h = font_size + 2
 
@@ -486,17 +564,23 @@ def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -
     # 격자 → 픽셀 (배경을 모두 먼저 칠하고 글자를 그려야 전각 글자가 안 잘린다)
     x_off = (W - cols * cell_w) // 2
     y_off = cell_h // 2
-    _paint_glass_panels(img, canvas, x_off, y_off, cell_w, cell_h)
+    if palette.get("handdrawn"):
+        _paint_handdrawn_panels(img, canvas, x_off, y_off, cell_w, cell_h)
+    else:
+        _paint_glass_panels(img, canvas, x_off, y_off, cell_w, cell_h)
     for r in range(rows):
         for c in range(cols):
             cell = canvas.grid[r][c]
             if cell and cell[2]:
                 x, y = x_off + c * cell_w, y_off + r * cell_h
                 draw.rectangle([x, y, x + cell_w - 1, y + cell_h - 1], fill=cell[2])
+    BOX_CHARS = {"┌", "─", "┐", "│", "└", "┘", "├", "┤"}
     for r in range(rows):
         for c in range(cols):
             cell = canvas.grid[r][c]
             if cell and cell[0] and cell[0] != " ":
+                if palette.get("handdrawn") and cell[0] in BOX_CHARS:
+                    continue
                 draw.text((x_off + c * cell_w, y_off + r * cell_h),
                           cell[0], font=font, fill=cell[1])
 

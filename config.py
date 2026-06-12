@@ -13,6 +13,7 @@ UI_THEMES = {
     "black_on_white": "Black on white",
     "white_on_black": "White on black",
     "liquid_glass": "Liquid glass",
+    "crayon_sketch": "Crayon sketch",
 }
 DEFAULT_UI_THEME = "black_on_white"
 

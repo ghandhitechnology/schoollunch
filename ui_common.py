@@ -44,6 +44,17 @@ PALETTES = {
         "button_fg": "#ffffff",
         "canvas_bg": "#dbeafe",
     },
+    "crayon_sketch": {
+        "bg": "#fdfbf7",
+        "panel": "#fdfbf7",
+        "panel_alt": "#f5f0e6",
+        "fg": "#2c2c2c",
+        "dim": "#7c7267",
+        "border": "#2c2c2c",
+        "accent": "#e91e63",
+        "button_fg": "#ffffff",
+        "canvas_bg": "#f5f0e6",
+    },
 }
 
 _FONT_REGISTERED = False

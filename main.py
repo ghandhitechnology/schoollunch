@@ -97,6 +97,7 @@ def make_tray_icon():
         "black_on_white": ((255, 255, 255), (0, 0, 0)),
         "white_on_black": ((0, 0, 0), (255, 255, 255)),
         "liquid_glass": ((232, 241, 250), (36, 92, 255)),
+        "crayon_sketch": ((253, 251, 247), (44, 44, 44)),
     }
     cfg = config.load_config()
     bg, fg = tray_themes.get(cfg.get("ui_theme"), tray_themes[config.DEFAULT_UI_THEME])

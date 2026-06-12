@@ -111,7 +111,7 @@ class RenderExtremes(IsolatedConfigTest):
     }
 
     def test_all_themes_and_sizes(self):
-        for theme in ("black_on_white", "white_on_black", "liquid_glass"):
+        for theme in ("black_on_white", "white_on_black", "liquid_glass", "crayon_sketch"):
             for size in ((320, 180), (800, 600), (1710, 1107), (3840, 2160)):
                 img = self.render.render_wallpaper_image(
                     self.BIG_MEALS, self.BIG_TT, self._cfg(ui_theme=theme), size=size)
