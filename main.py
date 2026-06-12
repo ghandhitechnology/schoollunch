@@ -96,7 +96,6 @@ def make_tray_icon():
     tray_themes = {
         "black_on_white": ((255, 255, 255), (0, 0, 0)),
         "white_on_black": ((0, 0, 0), (255, 255, 255)),
-        "liquid_glass": ((232, 241, 250), (36, 92, 255)),
         "crayon_sketch": ((253, 251, 247), (44, 44, 44)),
         "cyber_terminal": ((10, 16, 13), (0, 255, 102)),
     }

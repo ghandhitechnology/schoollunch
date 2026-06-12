@@ -5,7 +5,6 @@
 
 ![black on white preview](preview_black_on_white.png)
 ![white on black preview](preview_white_on_black.png)
-![liquid glass preview](preview_liquid_glass.png)
 
 ## 기능
 
@@ -17,7 +16,8 @@
 - **바탕화면**: 모니터 해상도를 자동 감지해 픽셀 폰트(네오둥근모) 기반의
   터미널 화면을 그린다. 왼쪽 약 23%는 바탕화면 아이콘 자리로 비워 둔다.
   설정에서 배경 이미지를 고르면 어둡게 깔린다.
-- **UI 테마**: 설정에서 Black on white / White on black / Liquid glass 중
+- **UI 테마**: 설정에서 Black on white / White on black / Crayon sketch /
+  Cyber Terminal 중
   하나를 선택해 바탕화면과 설정창 스타일을 바꿀 수 있다.
 - **애플리케이션 UI**: 반/테마/배경/자동 실행 설정, 이미지 생성, 바탕화면 적용,
   급식/시간표 확인을 한 창에서 처리한다.

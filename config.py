@@ -12,7 +12,6 @@ APP_NAME = "하태욱프로그램"
 UI_THEMES = {
     "black_on_white": "Black on white",
     "white_on_black": "White on black",
-    "liquid_glass": "Liquid glass",
     "crayon_sketch": "Crayon sketch",
     "cyber_terminal": "Cyber Terminal",
 }
@@ -96,7 +95,11 @@ def _merge_custom_wallpaper(value) -> dict:
             path = sticker.get("path")
             rect = _safe_rect(sticker.get("rect"))
             if isinstance(path, str) and rect is not None:
-                stickers.append({"path": path, "rect": rect})
+                stickers.append({
+                    "path": path,
+                    "rect": rect,
+                    "angle": _safe_angle(sticker.get("angle", 0)),
+                })
         custom["stickers"] = stickers
     return custom
 
@@ -112,6 +115,16 @@ def _safe_rect(rect):
     if not all(math.isfinite(v) for v in values):
         return None
     return values
+
+
+def _safe_angle(value) -> float:
+    try:
+        angle = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(angle):
+        return 0.0
+    return angle % 360
 
 
 def _safe_int(value, default):

@@ -193,7 +193,7 @@ def show_app(on_save=None) -> bool:
         outer.pack_forget()
         if "editor" not in editor_holder:
             editor_holder["editor"] = CustomWallpaperEditor(
-                root, show_main, status_var.set, on_regenerate=lambda: worker(False)
+                root, show_main, status_var.set, on_regenerate=lambda: worker(True)
             )
         editor_holder["editor"].show()
 
@@ -293,28 +293,38 @@ def show_app(on_save=None) -> bool:
                 meals = fetch_meal.fetch_meals(current)
                 timetable = fetch_timetable.fetch_today(current)
                 path = render.render_wallpaper(meals, timetable, current)
+                is_offline = bool(meals.get("_cached") or timetable.get("_cached"))
+                offline_suffix = " (오프라인: 캐시 데이터)" if is_offline else ""
+
                 if apply:
-                    result = wallpaper.apply_wallpaper(path)
-                    if result["ok"]:
-                        detail = f" ({result['method']}"
-                        if result.get("screens"):
-                            detail += f", {result['screens']}개 화면"
-                        detail += ")"
-                        message = f"배경화면 적용 완료{detail}"
-                    else:
-                        message = f"이미지 저장 완료, OS 적용 실패: {result.get('detail') or result.get('path')}"
+                    def apply_on_main():
+                        try:
+                            result = wallpaper.apply_wallpaper(path)
+                            if result["ok"]:
+                                detail = f" ({result['method']}"
+                                if result.get("screens"):
+                                    detail += f", {result['screens']}개 화면"
+                                detail += ")"
+                                message = f"배경화면 적용 완료{detail}{offline_suffix}"
+                            else:
+                                message = f"이미지 저장 완료, OS 적용 실패: {result.get('detail') or result.get('path')}{offline_suffix}"
+                            status_var.set(message)
+                        except Exception as e:
+                            status_var.set(f"배경화면 적용 실패: {e}")
+                        finally:
+                            set_busy(False)
+                    ui_after(apply_on_main)
                 else:
-                    message = f"배경화면 재생성 완료: {path}"
-                if meals.get("_cached") or timetable.get("_cached"):
-                    message += " (오프라인: 캐시 데이터)"
+                    message = f"배경화면 재생성 완료: {path}{offline_suffix}"
+                    ui_after(status_var.set, message)
+                    ui_after(set_busy, False)
+
                 ui_after(fill_data, meals, timetable)
                 ui_after(path_var.set, path)
-                ui_after(status_var.set, message)
                 ui_after(request_preview)
             except Exception as e:
                 config.log(f"앱 UI 작업 실패: {e!r}")
                 ui_after(status_var.set, f"{action_label} 실패: {e}")
-            finally:
                 ui_after(set_busy, False)
         threading.Thread(target=run, daemon=True).start()
 
@@ -406,7 +416,7 @@ def show_app(on_save=None) -> bool:
     title = tk.Label(header, text="하태욱 프로그램", font=_font(22, "bold"), anchor="w")
     title.pack(side="left")
     remember(title, "label")
-    custom_button = ThemedButton(header, "커스텀 배경", show_custom_editor, font=_font(12, "bold"))
+    custom_button = ThemedButton(header, "사진추가", show_custom_editor, font=_font(12, "bold"))
     custom_button.pack(side="right", padx=(8, 0))
     buttons.append(custom_button)
     status = tk.Label(header, textvariable=status_var, font=_font(12), anchor="e",

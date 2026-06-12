@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 
+from PIL import Image
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
@@ -111,11 +113,16 @@ class RenderExtremes(IsolatedConfigTest):
     }
 
     def test_all_themes_and_sizes(self):
-        for theme in ("black_on_white", "white_on_black", "liquid_glass", "crayon_sketch", "cyber_terminal"):
+        for theme in ("black_on_white", "white_on_black", "crayon_sketch", "cyber_terminal"):
             for size in ((320, 180), (800, 600), (1710, 1107), (3840, 2160)):
                 img = self.render.render_wallpaper_image(
                     self.BIG_MEALS, self.BIG_TT, self._cfg(ui_theme=theme), size=size)
                 self.assertEqual(img.size, size, f"{theme} {size}")
+
+    def test_removed_liquid_glass_theme_falls_back(self):
+        with open(config.CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"ui_theme": "liquid_glass"}, f)
+        self.assertEqual(config.load_config()["ui_theme"], config.DEFAULT_UI_THEME)
 
     def test_empty_data(self):
         img = self.render.render_wallpaper_image({}, {}, self._cfg(), size=(640, 360))
@@ -124,12 +131,23 @@ class RenderExtremes(IsolatedConfigTest):
     def test_custom_layout_with_broken_assets(self):
         custom = config.default_custom_wallpaper()
         custom["background_image"] = "/no/such/file.png"
-        custom["stickers"] = [{"path": "/missing.png", "rect": [0.1, 0.1, 0.2, 0.2]}]
+        custom["stickers"] = [{"path": "/missing.png", "rect": [0.1, 0.1, 0.2, 0.2], "angle": 45}]
         custom["layout"]["timetable"] = [0.0, 0.0, 0.04, 0.04]   # 최소 크기
         custom["drawing_overlay"] = config.CUSTOM_DRAWING_PATH
         with open(config.CUSTOM_DRAWING_PATH, "wb") as f:
             f.write(b"this is not a png")
         cfg = self._cfg(custom_wallpaper=custom)
+        img = self.render.render_wallpaper_image(self.BIG_MEALS, self.BIG_TT, cfg, size=(960, 540))
+        self.assertEqual(img.size, (960, 540))
+
+    def test_sticker_rotation_round_trips_and_renders(self):
+        sticker_path = os.path.join(os.path.dirname(config.CONFIG_PATH), "sticker.png")
+        Image.new("RGBA", (60, 30), (255, 0, 0, 255)).save(sticker_path)
+        merged = config._merge_custom_wallpaper({
+            "stickers": [{"path": sticker_path, "rect": [0.2, 0.2, 0.25, 0.25], "angle": 735}]
+        })
+        self.assertEqual(merged["stickers"][0]["angle"], 15)
+        cfg = self._cfg(custom_wallpaper=merged)
         img = self.render.render_wallpaper_image(self.BIG_MEALS, self.BIG_TT, cfg, size=(960, 540))
         self.assertEqual(img.size, (960, 540))
 
@@ -280,7 +298,7 @@ class FontScale(IsolatedConfigTest):
             cfg["custom_wallpaper"]["font_scale"] = scale
             img = render.render_wallpaper_image(meals, tt, cfg, size=(960, 540))
             self.assertEqual(img.size, (960, 540), f"TUI path scale={scale}")
-            cfg["custom_wallpaper"]["stickers"] = [{"path": "/missing.png", "rect": [0.1, 0.1, 0.2, 0.2]}]
+            cfg["custom_wallpaper"]["stickers"] = [{"path": "/missing.png", "rect": [0.1, 0.1, 0.2, 0.2], "angle": 30}]
             img = render.render_wallpaper_image(meals, tt, cfg, size=(960, 540))
             self.assertEqual(img.size, (960, 540), f"custom path scale={scale}")
             cfg["custom_wallpaper"]["stickers"] = []
@@ -292,14 +310,14 @@ class WallpaperPathLogic(IsolatedConfigTest):
         self.assertFalse(wallpaper.set_wallpaper("/no/such/wallpaper.png"))
 
     def test_macos_alternating_target(self):
-        """같은 경로로 덮어쓰면 macOS가 변경을 무시하므로 매번 다른 파일명이어야 한다."""
+        """macOS 캐시 우회를 위해 적용 때마다 새 파일명이어야 한다."""
         import wallpaper
         if not hasattr(wallpaper, "_macos_live_path"):
-            self.skipTest("alternating path not implemented")
+            self.skipTest("live path not implemented")
         a = wallpaper._macos_live_path(current=None)
         b = wallpaper._macos_live_path(current=a)
         self.assertNotEqual(a, b)
-        self.assertEqual(wallpaper._macos_live_path(current=b), a)
+        self.assertNotEqual(wallpaper._macos_live_path(current=b), a)
 
 
 class UiFormatting(unittest.TestCase):

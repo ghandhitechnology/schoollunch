@@ -4,10 +4,11 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 
 import config
 
-_LIVE_NAMES = ("wallpaper_live_a.png", "wallpaper_live_b.png")
+_LIVE_PREFIX = "wallpaper_live_"
 
 
 def _result(ok: bool, path: str = "", method: str = "", detail: str = "", screens: int = 0) -> dict:
@@ -20,13 +21,39 @@ def _result(ok: bool, path: str = "", method: str = "", detail: str = "", screen
     }
 
 
-def _macos_live_path(current: str | None) -> str:
-    """macOS는 같은 경로의 이미지를 다시 지정하면 갱신을 무시할 수 있으므로
-    두 파일명을 번갈아 사용한다."""
-    a, b = (os.path.join(config.app_dir(), name) for name in _LIVE_NAMES)
-    if current and os.path.basename(current) == _LIVE_NAMES[0]:
-        return b
-    return a
+def _macos_live_path(current: str | None = None) -> str:
+    """macOS는 같은 경로를 다시 지정하면 새 이미지를 무시할 수 있다.
+
+    두 고정 파일명을 번갈아 쓰면 한쪽 파일이 오래된 렌더를 들고 있을 때
+    사용자가 보기에는 흑백 테마만 토글되는 것처럼 보일 수 있다. 매번 새
+    파일명을 만들어 Finder/DesktopServices 캐시를 확실히 우회한다.
+    """
+    return os.path.join(config.app_dir(), f"{_LIVE_PREFIX}{uuid.uuid4().hex}.png")
+
+
+def _cleanup_macos_live_files(keep_path: str, max_files: int = 6) -> None:
+    try:
+        base = config.app_dir()
+        keep_path = os.path.abspath(keep_path)
+        entries = []
+        for name in os.listdir(base):
+            if not name.startswith(_LIVE_PREFIX) or not name.endswith(".png"):
+                continue
+            path = os.path.join(base, name)
+            if os.path.abspath(path) == keep_path:
+                continue
+            try:
+                entries.append((os.path.getmtime(path), path))
+            except OSError:
+                continue
+        entries.sort(reverse=True)
+        for _mtime, path in entries[max_files:]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 def _set_macos_wallpaper_appkit(png_path: str) -> tuple[bool, str, int]:
@@ -101,12 +128,14 @@ def apply_wallpaper(png_path: str) -> dict:
         ok, err, screens = _set_macos_wallpaper_appkit(png_path)
         if ok:
             config.save_cache_entry("wallpaper_live", png_path)
+            _cleanup_macos_live_files(png_path)
             config.log(f"macOS 바탕화면 적용 성공(AppKit, {screens}개 화면): {png_path}")
             return _result(True, png_path, "AppKit", f"{screens}개 화면 적용", screens)
         config.log(f"macOS AppKit 바탕화면 적용 실패, AppleScript 재시도: {err}")
         ok, script_err = _set_macos_wallpaper_osascript(png_path)
         if ok:
             config.save_cache_entry("wallpaper_live", png_path)
+            _cleanup_macos_live_files(png_path)
             config.log(f"macOS 바탕화면 적용 성공(AppleScript): {png_path}")
             return _result(True, png_path, "AppleScript", "System Events fallback", 0)
         config.log(f"macOS 바탕화면 적용 실패: AppKit={err}; AppleScript={script_err}")

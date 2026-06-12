@@ -33,17 +33,6 @@ PALETTES = {
         "button_fg": "#000000",
         "canvas_bg": "#111111",
     },
-    "liquid_glass": {
-        "bg": "#e8f1fa",
-        "panel": "#f7fbff",
-        "panel_alt": "#eef5fb",
-        "fg": "#142033",
-        "dim": "#627183",
-        "border": "#9fb7d8",
-        "accent": "#245cff",
-        "button_fg": "#ffffff",
-        "canvas_bg": "#dbeafe",
-    },
     "crayon_sketch": {
         "bg": "#fdfbf7",
         "panel": "#fdfbf7",

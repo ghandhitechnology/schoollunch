@@ -105,7 +105,7 @@ def script(root):
     check(regen._enabled, "buttons re-enabled after work")
 
     # 6. 에디터 열기
-    btns["커스텀 배경"]._command()
+    btns["사진추가"]._command()
     yield ("editor visible", lambda: any(
         isinstance(o, CustomWallpaperEditor) and o.frame.winfo_ismapped()
         for o in gc.get_objects() if isinstance(o, CustomWallpaperEditor)), 10)
@@ -148,9 +148,11 @@ def script(root):
     # 10. 스티커 추가/선택/삭제
     sticker_count = len(editor.custom.get("stickers", []))
     editor.custom.setdefault("stickers", []).append(
-        {"path": app_ui.config.WALLPAPER_PATH, "rect": [0.4, 0.4, 0.15, 0.15]})
+        {"path": app_ui.config.WALLPAPER_PATH, "rect": [0.4, 0.4, 0.15, 0.15], "angle": 0})
     editor.selected = ("sticker", sticker_count)
     editor.update_overlays()
+    editor.rotate_selected_sticker(15)
+    check(editor.custom["stickers"][sticker_count]["angle"] == 15, "selected sticker rotated")
     editor.delete_selected_sticker()
     check(len(editor.custom.get("stickers", [])) == sticker_count, "sticker deleted via method")
     editor.delete_selected_sticker()  # 스티커 미선택 → 안내 메시지, 크래시 없어야 함
@@ -174,7 +176,7 @@ def script(root):
     check(app_ui.config.load_config()["configured"], "config persisted")
 
     # 13. 에디터 재진입 (상태 재사용 경로)
-    buttons_by_text(root)["커스텀 배경"]._command()
+    buttons_by_text(root)["사진추가"]._command()
     yield ("editor reopened", lambda: editor.frame.winfo_ismapped(), 5)
     check(editor.frame.winfo_ismapped(), "editor reopens cleanly")
     editor.back()

@@ -36,19 +36,6 @@ THEMES = {
         "use_background_image": False,
         "scanline_alpha": 0,
     },
-    "liquid_glass": {
-        "bg": (230, 239, 248),
-        "text": (18, 31, 48),
-        "dim": (76, 92, 112),
-        "bright": (4, 11, 24),
-        "accent": (36, 92, 255),
-        "panel_fill": (255, 255, 255, 118),
-        "panel_outline": (255, 255, 255, 210),
-        "panel_shadow": (20, 35, 60, 42),
-        "use_background_image": True,
-        "scanline_alpha": 0,
-        "glass": True,
-    },
     "crayon_sketch": {
         "bg": (253, 251, 247),
         "text": (44, 44, 44),
@@ -395,6 +382,9 @@ def _apply_custom_layers(img: Image.Image, cfg: dict, size):
             continue
         try:
             original = Image.open(sticker_path).convert("RGBA")
+            angle = config._safe_angle(sticker.get("angle", 0))
+            if angle:
+                original = original.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
             original.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
             paste_x = x0 + ((x1 - x0) - original.width) // 2
             paste_y = y0 + ((y1 - y0) - original.height) // 2

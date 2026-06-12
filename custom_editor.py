@@ -111,10 +111,14 @@ class CustomWallpaperEditor:
 
         self._button(row1, "뒤로", self.back).pack(side="left", padx=(0, 6))
         self._button(row1, "저장", self.save).pack(side="left", padx=(0, 14))
-        self._button(row1, "배경화면 재생성", lambda: self.save(regenerate=True)).pack(side="left", padx=(0, 14))
+        self._button(row1, "배경화면 저장", lambda: self.save(regenerate=True)).pack(side="left", padx=(0, 14))
         self._button(row1, "배경 이미지", self.choose_background).pack(side="left", padx=(0, 6))
         self._button(row1, "스티커 추가", self.add_sticker).pack(side="left", padx=(0, 6))
-        self._button(row1, "스티커 삭제", self.delete_selected_sticker).pack(side="left")
+        self._button(row1, "스티커 삭제", self.delete_selected_sticker).pack(side="left", padx=(0, 14))
+        self._button(row1, "회전 -", lambda: self.rotate_selected_sticker(-15)).pack(side="left", padx=(0, 6))
+        self.rotation_label = tk.Label(row1, text="회전 0°", font=_font(12, "bold"))
+        self.rotation_label.pack(side="left")
+        self._button(row1, "회전 +", lambda: self.rotate_selected_sticker(15)).pack(side="left", padx=(6, 0))
 
         for label, mode in (("선택", "select"), ("펜", "pen"), ("지우개", "eraser")):
             button = self._button(row2, label, lambda m=mode: self.set_mode(m))
@@ -154,6 +158,7 @@ class CustomWallpaperEditor:
             toolbar_row.configure(bg=p["panel"])
         self.canvas.configure(bg=p["canvas_bg"], highlightbackground=p["border"])
         self.font_scale_label.configure(bg=p["panel"], fg=p["fg"])
+        self.rotation_label.configure(bg=p["panel"], fg=p["fg"])
         for button in self.buttons:
             button.set_palette(p)
         active = self.mode.get()
@@ -203,10 +208,12 @@ class CustomWallpaperEditor:
         self.root.bind("<Escape>", lambda _e: self.back())
         self.root.bind("<Delete>", lambda _e: self.delete_selected_sticker())
         self.root.bind("<BackSpace>", lambda _e: self.delete_selected_sticker())
+        self.root.bind("<bracketleft>", lambda _e: self.rotate_selected_sticker(-15))
+        self.root.bind("<bracketright>", lambda _e: self.rotate_selected_sticker(15))
         self.set_status("커스텀 배경 편집")
 
     def hide(self):
-        for sequence in ("<Escape>", "<Delete>", "<BackSpace>"):
+        for sequence in ("<Escape>", "<Delete>", "<BackSpace>", "<bracketleft>", "<bracketright>"):
             self.root.unbind(sequence)
         self.frame.pack_forget()
 
@@ -248,7 +255,11 @@ class CustomWallpaperEditor:
             filetypes=[("이미지", "*.png *.jpg *.jpeg *.bmp"), ("모든 파일", "*.*")],
         )
         if path:
-            self.custom.setdefault("stickers", []).append({"path": path, "rect": [0.38, 0.36, 0.18, 0.18]})
+            self.custom.setdefault("stickers", []).append({
+                "path": path,
+                "rect": [0.38, 0.36, 0.18, 0.18],
+                "angle": 0,
+            })
             self.selected = ("sticker", len(self.custom["stickers"]) - 1)
             self.update_overlays()
             self.request_preview(30)
@@ -264,6 +275,26 @@ class CustomWallpaperEditor:
             self.set_status("스티커 삭제됨")
         else:
             self.set_status("삭제할 스티커를 먼저 선택하세요")
+
+    def selected_sticker(self):
+        kind, key = self.selected
+        stickers = self.custom.get("stickers", [])
+        if kind == "sticker" and 0 <= key < len(stickers):
+            return stickers[key]
+        return None
+
+    def rotate_selected_sticker(self, delta):
+        if self.saving:
+            return
+        sticker = self.selected_sticker()
+        if not sticker:
+            self.set_status("회전할 스티커를 먼저 선택하세요")
+            return
+        sticker["angle"] = config._safe_angle(sticker.get("angle", 0) + delta)
+        self.update_rotation_label()
+        self.update_overlays()
+        self.request_preview(30)
+        self.set_status(f"스티커 회전 {round(sticker['angle'])}° (저장을 눌러야 적용됩니다)")
 
     def clear_drawing(self):
         self.drawing = Image.new("RGBA", EDITOR_SIZE, (0, 0, 0, 0))
@@ -296,6 +327,7 @@ class CustomWallpaperEditor:
                     custom["layout"][name] = _clamp_rect(rect)
                 for sticker in custom.get("stickers", []):
                     sticker["rect"] = _clamp_rect(sticker.get("rect", [0, 0, 0.1, 0.1]))
+                    sticker["angle"] = config._safe_angle(sticker.get("angle", 0))
                 cfg = config.load_config()
                 cfg["custom_wallpaper"] = custom
                 cfg["configured"] = True
@@ -312,6 +344,7 @@ class CustomWallpaperEditor:
         self.set_busy(False)
         if ok:
             self.custom = copy.deepcopy(custom)
+            self.update_rotation_label()
             self.set_status("커스텀 배경 저장됨")
             self.request_preview(30)
             if self.regenerate_after_save and self.on_regenerate:
@@ -447,8 +480,10 @@ class CustomWallpaperEditor:
             self.draw_rect(rect, labels.get(name, name),
                            p["accent"] if self.selected == ("panel", name) else p["border"])
         for idx, sticker in enumerate(self.custom.get("stickers", [])):
-            self.draw_rect(sticker.get("rect", [0, 0, 0.1, 0.1]), f"스티커 {idx + 1}",
+            angle = round(config._safe_angle(sticker.get("angle", 0)))
+            self.draw_rect(sticker.get("rect", [0, 0, 0.1, 0.1]), f"스티커 {idx + 1} · {angle}°",
                            p["accent"] if self.selected == ("sticker", idx) else p["dim"])
+        self.update_rotation_label()
 
     def draw_rect(self, rect, label, color):
         x0, y0, x1, y1 = self.rect_to_canvas(rect)
@@ -482,6 +517,11 @@ class CustomWallpaperEditor:
             self.custom["layout"][key] = rect
         elif kind == "sticker" and 0 <= key < len(self.custom.get("stickers", [])):
             self.custom["stickers"][key]["rect"] = rect
+
+    def update_rotation_label(self):
+        sticker = self.selected_sticker()
+        angle = round(config._safe_angle(sticker.get("angle", 0))) if sticker else 0
+        self.rotation_label.configure(text=f"회전 {angle}°")
 
     def hit_test(self, nx, ny):
         for idx in reversed(range(len(self.custom.get("stickers", [])))):
