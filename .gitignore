@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+build/
+build-macos/
+dist/
+dist-macos/
+*.pyc
+.DS_Store
+*.tmp
+*.spec
