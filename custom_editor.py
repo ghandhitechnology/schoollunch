@@ -16,6 +16,7 @@ from tkinter import colorchooser, filedialog
 from PIL import Image, ImageDraw, ImageTk
 
 import config
+import fetch_timetable
 import render
 import ui_common
 from ui_common import ThemedButton, font as _font
@@ -126,6 +127,11 @@ class CustomWallpaperEditor:
         swatch.bind("<Button-1>", lambda _e: self.pick_color())
         self.swatch = swatch
 
+        self._button(row2, "글자 −", lambda: self.adjust_font_scale(-0.1)).pack(side="left", padx=(14, 6))
+        self.font_scale_label = tk.Label(row2, text="글자 100%", font=_font(12, "bold"))
+        self.font_scale_label.pack(side="left")
+        self._button(row2, "글자 +", lambda: self.adjust_font_scale(0.1)).pack(side="left", padx=(6, 0))
+
         self.canvas = tk.Canvas(self.frame, highlightthickness=1)
         self.canvas.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.canvas.bind("<Configure>", lambda _e: self.on_canvas_resize())
@@ -147,6 +153,7 @@ class CustomWallpaperEditor:
         for toolbar_row in self.toolbar_rows:
             toolbar_row.configure(bg=p["panel"])
         self.canvas.configure(bg=p["canvas_bg"], highlightbackground=p["border"])
+        self.font_scale_label.configure(bg=p["panel"], fg=p["fg"])
         for button in self.buttons:
             button.set_palette(p)
         active = self.mode.get()
@@ -186,6 +193,7 @@ class CustomWallpaperEditor:
             self.drawing = Image.new("RGBA", EDITOR_SIZE, (0, 0, 0, 0))
         self._palette = None  # 메인 화면에서 테마가 바뀌었을 수 있다
         self.apply_style()
+        self.update_font_scale_label()
         self.update_overlays()
         self.request_preview(30)
 
@@ -205,6 +213,18 @@ class CustomWallpaperEditor:
     def back(self):
         self.hide()
         self.on_back()
+
+    def adjust_font_scale(self, delta):
+        scale = config._safe_font_scale(self.custom.get("font_scale", 1.0) + delta)
+        scale = round(scale * 10) / 10
+        self.custom["font_scale"] = scale
+        self.update_font_scale_label()
+        self.request_preview(120)
+        self.set_status(f"글자 크기 {round(scale * 100)}% (저장을 눌러야 적용됩니다)")
+
+    def update_font_scale_label(self):
+        scale = config._safe_font_scale(self.custom.get("font_scale", 1.0))
+        self.font_scale_label.configure(text=f"글자 {round(scale * 100)}%")
 
     def pick_color(self):
         color = colorchooser.askcolor(color=self.ink_var.get(), parent=self.root)[1]
@@ -304,7 +324,8 @@ class CustomWallpaperEditor:
     def sample_data(self):
         cache = config.load_cache()
         meals = dict(cache.get("meal", {}).get("data") or {})
-        timetable = dict(cache.get("timetable") or {})
+        timetable = copy.deepcopy(cache.get("timetable") or {})
+        fetch_timetable._resolve_teachers(timetable, config.load_config().get("teacher_names") or [])
         if not timetable:
             timetable = {
                 "date": "2026-06-12",

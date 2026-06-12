@@ -59,6 +59,7 @@ def show_app(on_save=None) -> bool:
 
     widgets = []
     buttons = []
+    wallpaper_buttons = []
     option_menus = []
     editor_holder = {}
     ui_queue = queue.Queue()
@@ -165,13 +166,18 @@ def show_app(on_save=None) -> bool:
         apply_autostart_async(current["autostart"])
         status_var.set("설정 저장됨")
 
-    def set_busy(value, text=None):
-        state["busy"] = value
+    def set_buttons_enabled(targets, enabled):
+        for button in targets:
+            if button.winfo_exists():
+                button.set_enabled(enabled)
+
+    def set_busy(value, text=None, scope="all"):
+        if scope == "all":
+            state["busy"] = value
         if text:
             status_var.set(text)
-        for button in buttons:
-            if button.winfo_exists():
-                button.set_enabled(not value)
+        targets = buttons if scope == "all" else wallpaper_buttons
+        set_buttons_enabled(targets, not value)
 
     def show_main():
         if "editor" in editor_holder:
@@ -190,6 +196,50 @@ def show_app(on_save=None) -> bool:
                 root, show_main, status_var.set, on_regenerate=lambda: worker(False)
             )
         editor_holder["editor"].show()
+
+    def edit_teacher_names():
+        p = palette()
+        dialog = tk.Toplevel(root)
+        dialog.title("교사 명단")
+        dialog.geometry("380x460")
+        dialog.configure(bg=p["bg"])
+        dialog.transient(root)
+        info = tk.Label(
+            dialog,
+            text="컴시간알리미는 교사 이름을 '김완*'처럼 가려서 보냅니다.\n"
+                 "전체 이름을 한 줄에 하나씩 입력해 두면, 이름이 정확히\n"
+                 "한 명과 일치할 때 자동으로 전체 이름으로 표시합니다.",
+            font=_font(11), justify="left", anchor="w", bg=p["bg"], fg=p["dim"])
+        info.pack(fill="x", padx=14, pady=(12, 8))
+        roster_text = tk.Text(dialog, font=_font(12), borderwidth=0, highlightthickness=1,
+                              bg=p["panel_alt"], fg=p["fg"], insertbackground=p["fg"],
+                              highlightbackground=p["border"], highlightcolor=p["border"])
+        roster_text.pack(fill="both", expand=True, padx=14)
+        roster_text.insert("1.0", "\n".join(config.load_config().get("teacher_names", [])))
+
+        def save_roster():
+            names = []
+            for line in roster_text.get("1.0", "end").splitlines():
+                name = line.strip()
+                if name and name not in names:
+                    names.append(name)
+            latest = config.load_config()
+            latest["teacher_names"] = names
+            config.save_config(latest)
+            cfg.clear()
+            cfg.update(latest)
+            dialog.destroy()
+            status_var.set(f"교사 명단 저장됨 ({len(names)}명)")
+            fill_cached_data()
+            request_preview()
+
+        footer = tk.Frame(dialog, bg=p["bg"])
+        footer.pack(fill="x", padx=14, pady=10)
+        for text, cmd, side in (("저장", save_roster, "right"), ("닫기", dialog.destroy, "right")):
+            b = ThemedButton(footer, text, cmd, font=_font(12, "bold"))
+            b.set_palette(p)
+            b.pack(side=side, padx=(8, 0))
+        roster_text.focus_set()
 
     def choose_background():
         path = filedialog.askopenfilename(
@@ -216,12 +266,19 @@ def show_app(on_save=None) -> bool:
         _set_text(timetable_text, "\n".join(format_timetable_lines(timetable)))
         _set_text(meal_text, "\n".join(format_meal_lines(meals)))
 
-    def fill_cached_data():
+    def cached_display_data():
+        """캐시 데이터를 읽어 교사 명단 매칭까지 적용한다 (표시/미리보기 공용)."""
+        import copy as _copy
         cache = config.load_cache()
         meals = dict(cache.get("meal", {}).get("data") or {})
-        timetable = dict(cache.get("timetable") or {})
+        timetable = _copy.deepcopy(cache.get("timetable") or {})
         if not timetable:
             timetable = {"date": "", "weekday_label": "", "periods": []}
+        fetch_timetable._resolve_teachers(timetable, config.load_config().get("teacher_names") or [])
+        return meals, timetable
+
+    def fill_cached_data():
+        meals, timetable = cached_display_data()
         fill_data(meals, timetable)
 
     def worker(apply=False):
@@ -237,8 +294,15 @@ def show_app(on_save=None) -> bool:
                 timetable = fetch_timetable.fetch_today(current)
                 path = render.render_wallpaper(meals, timetable, current)
                 if apply:
-                    ok = wallpaper.set_wallpaper(path)
-                    message = "배경화면 적용 완료" if ok else f"이미지 저장 완료, OS 적용 실패: {path}"
+                    result = wallpaper.apply_wallpaper(path)
+                    if result["ok"]:
+                        detail = f" ({result['method']}"
+                        if result.get("screens"):
+                            detail += f", {result['screens']}개 화면"
+                        detail += ")"
+                        message = f"배경화면 적용 완료{detail}"
+                    else:
+                        message = f"이미지 저장 완료, OS 적용 실패: {result.get('detail') or result.get('path')}"
                 else:
                     message = f"배경화면 재생성 완료: {path}"
                 if meals.get("_cached") or timetable.get("_cached"):
@@ -258,7 +322,7 @@ def show_app(on_save=None) -> bool:
         """시작 시 백그라운드로 급식/시간표만 가져와 화면을 채운다 (배경화면은 건드리지 않음)."""
         if state["busy"]:
             return
-        set_busy(True, "급식·시간표 가져오는 중...")
+        set_busy(True, "급식·시간표 가져오는 중...", scope="wallpaper")
         snapshot = current_config()
 
         def run():
@@ -274,7 +338,7 @@ def show_app(on_save=None) -> bool:
                 config.log(f"데이터 갱신 실패: {e!r}")
                 ui_after(status_var.set, f"데이터 갱신 실패: {e}")
             finally:
-                ui_after(set_busy, False)
+                ui_after(set_busy, False, None, "wallpaper")
         threading.Thread(target=run, daemon=True).start()
 
     # ── 바탕화면 라이브 미리보기 (캐시 데이터 + 현재 설정으로 렌더) ──
@@ -303,9 +367,7 @@ def show_app(on_save=None) -> bool:
         pw, ph = max(64, pw), max(36, ph)
         ox, oy = (cw - pw) // 2, (ch - ph) // 2
         snapshot = current_config()
-        cache = config.load_cache()
-        meals = dict(cache.get("meal", {}).get("data") or {})
-        timetable = dict(cache.get("timetable") or {})
+        meals, timetable = cached_display_data()
         preview["busy"] = True
         preview["token"] += 1
         token = preview["token"]
@@ -403,6 +465,10 @@ def show_app(on_save=None) -> bool:
         b.pack(side="left", fill="x", expand=True, padx=(0, 6))
         buttons.append(b)
 
+    teacher_button = ThemedButton(control, "교사 명단 (이름 가림 해제)", edit_teacher_names, font=_font(12))
+    teacher_button.pack(fill="x", padx=10, pady=(0, 8))
+    buttons.append(teacher_button)
+
     auto = tk.Checkbutton(control, text="시작 시 자동 실행", variable=auto_var, font=_font(12), anchor="w")
     auto.pack(fill="x", padx=10, pady=(0, 10))
     remember(auto, "label")
@@ -417,6 +483,8 @@ def show_app(on_save=None) -> bool:
         b = ThemedButton(action, text, cmd, font=_font(13, "bold"))
         b.pack(fill="x", padx=10, pady=5)
         buttons.append(b)
+        if text != "설정 저장":
+            wallpaper_buttons.append(b)
 
     info = section(left, "파일")
     info.pack(fill="x", pady=(14, 0))

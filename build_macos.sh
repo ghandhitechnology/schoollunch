@@ -22,6 +22,7 @@ REAL_EXEC="$APP_PATH/Contents/MacOS/하태욱 프로그램.real"
   --workpath "$WORK_DIR" \
   --windowed \
   --name "하태욱 프로그램" \
+  --osx-bundle-identifier "com.hataewook.wallpaper" \
   --icon "assets/icons/app_icon.icns" \
   --add-data "assets:assets" \
   main.py

@@ -104,7 +104,7 @@ class ThemedButton(tk.Label):
 
     def __init__(self, parent, text, command, font=None, padx=12, pady=6):
         super().__init__(parent, text=text, font=font, padx=padx, pady=pady,
-                         cursor="hand2", highlightthickness=1)
+                         cursor="hand2", highlightthickness=1, takefocus=1)
         self._command = command
         self._palette = None
         self._enabled = True
@@ -115,6 +115,10 @@ class ThemedButton(tk.Label):
         self.bind("<Leave>", self._on_leave)
         self.bind("<ButtonPress-1>", self._on_press)
         self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<Key-Return>", self._on_key_activate)
+        self.bind("<Key-space>", self._on_key_activate)
+        self.bind("<FocusIn>", lambda _event: self._refresh())
+        self.bind("<FocusOut>", lambda _event: self._refresh())
 
     def set_palette(self, p):
         self._palette = p
@@ -165,3 +169,8 @@ class ThemedButton(tk.Label):
             return
         if 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
             self._command()
+
+    def _on_key_activate(self, _event):
+        if self._enabled and self._command:
+            self._command()
+        return "break"

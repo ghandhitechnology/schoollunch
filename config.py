@@ -17,6 +17,8 @@ UI_THEMES = {
     "cyber_terminal": "Cyber Terminal",
 }
 DEFAULT_UI_THEME = "black_on_white"
+VALID_GRADES = (1,)
+VALID_CLASSES = (1, 2, 3, 4)
 
 
 def app_dir() -> str:
@@ -41,10 +43,13 @@ LOG_PATH = os.path.join(app_dir(), "log.txt")
 WALLPAPER_PATH = os.path.join(app_dir(), "wallpaper.png")
 CUSTOM_DRAWING_PATH = os.path.join(app_dir(), "custom_drawing.png")
 
+FONT_SCALE_MIN, FONT_SCALE_MAX = 0.5, 2.5
+
 DEFAULT_CUSTOM_WALLPAPER = {
     "background_image": "",
     "drawing_overlay": CUSTOM_DRAWING_PATH,
     "pen_color": "#245cff",
+    "font_scale": 1.0,
     "layout": {
         "prompt": [0.24, 0.035, 0.50, 0.045],
         "timetable": [0.24, 0.095, 0.28, 0.24],
@@ -62,6 +67,7 @@ DEFAULTS = {
     "configured": False,      # 최초 설정창을 거쳤는지
     "neis": {},               # {"atpt": "E10", "code": "7310058"} 캐시
     "comcigan_code": 0,       # 컴시간알리미 학교 코드 캐시
+    "teacher_names": [],      # 교사 전체 이름 명단 (컴시간 마스킹 해제 매칭용)
     "custom_wallpaper": DEFAULT_CUSTOM_WALLPAPER,
 }
 
@@ -77,6 +83,7 @@ def _merge_custom_wallpaper(value) -> dict:
     for key in ("background_image", "drawing_overlay", "pen_color"):
         if isinstance(value.get(key), str):
             custom[key] = value[key]
+    custom["font_scale"] = _safe_font_scale(value.get("font_scale"))
     if isinstance(value.get("layout"), dict):
         for name, default_rect in custom["layout"].items():
             rect = _safe_rect(value["layout"].get(name))
@@ -114,6 +121,21 @@ def _safe_int(value, default):
         return default
 
 
+def _safe_choice(value, choices, default):
+    value = _safe_int(value, default)
+    return value if value in choices else default
+
+
+def _safe_font_scale(value) -> float:
+    try:
+        scale = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(scale):
+        return 1.0
+    return min(FONT_SCALE_MAX, max(FONT_SCALE_MIN, scale))
+
+
 def load_config() -> dict:
     cfg = copy.deepcopy(DEFAULTS)
     try:
@@ -124,13 +146,16 @@ def load_config() -> dict:
     except (OSError, ValueError):
         pass
     # 손으로 고치거나 깨진 설정 파일이 백그라운드 갱신을 죽이지 않도록 정규화
-    cfg["grade"] = _safe_int(cfg.get("grade"), DEFAULTS["grade"])
-    cfg["class_num"] = _safe_int(cfg.get("class_num"), DEFAULTS["class_num"])
+    cfg["grade"] = _safe_choice(cfg.get("grade"), VALID_GRADES, DEFAULTS["grade"])
+    cfg["class_num"] = _safe_choice(cfg.get("class_num"), VALID_CLASSES, DEFAULTS["class_num"])
     if cfg.get("ui_theme") not in UI_THEMES:
         cfg["ui_theme"] = DEFAULT_UI_THEME
     if not isinstance(cfg.get("background_image"), str):
         cfg["background_image"] = ""
     cfg["autostart"] = bool(cfg.get("autostart", True))
+    names = cfg.get("teacher_names")
+    cfg["teacher_names"] = [n.strip() for n in names
+                            if isinstance(n, str) and n.strip()] if isinstance(names, list) else []
     cfg["custom_wallpaper"] = _merge_custom_wallpaper(cfg.get("custom_wallpaper"))
     return cfg
 

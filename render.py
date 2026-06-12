@@ -99,6 +99,11 @@ def _truncate(s: str, width: int) -> str:
     return out
 
 
+def _font_scale(cfg: dict) -> float:
+    custom = cfg.get("custom_wallpaper") or {}
+    return config._safe_font_scale(custom.get("font_scale", 1.0))
+
+
 def _theme_key(value: str) -> str:
     return value if value in THEMES else config.DEFAULT_UI_THEME
 
@@ -403,8 +408,8 @@ def _render_custom_wallpaper(meals: dict, timetable: dict, cfg: dict, size, pale
     img = _load_background("", (W, H), palette).convert("RGBA")
     _apply_custom_layers(img, cfg, size)
     draw = ImageDraw.Draw(img, "RGBA")
-    font_size = max(12, round(H / 54))
-    title_size = max(14, round(font_size * 1.15))
+    font_size = max(8, round(H / 54 * _font_scale(cfg)))
+    title_size = max(10, round(font_size * 1.15))
     font_path = HANDWRITTEN_FONT_PATH if palette.get("handdrawn") and os.path.exists(HANDWRITTEN_FONT_PATH) else FONT_PATH
     font = ImageFont.truetype(font_path, font_size)
     title_font = ImageFont.truetype(font_path, title_size)
@@ -581,8 +586,8 @@ def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -
     if _custom_enabled(cfg):
         return _render_custom_wallpaper(meals, timetable, cfg, (W, H), palette)
 
-    # 픽셀 폰트는 16px 배수에서 또렷하다
-    font_size = 16 * max(1, round(H / 1080 * 2))
+    # 픽셀 폰트는 16px 배수에서 또렷하다 (글자 크기 설정으로 추가 보정)
+    font_size = max(8, round(16 * max(1, round(H / 1080 * 2)) * _font_scale(cfg)))
     font_path = HANDWRITTEN_FONT_PATH if palette.get("handdrawn") and os.path.exists(HANDWRITTEN_FONT_PATH) else FONT_PATH
     font = ImageFont.truetype(font_path, font_size)
     cell_w = round(font.getlength("A"))

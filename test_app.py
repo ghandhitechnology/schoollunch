@@ -204,6 +204,88 @@ class FetchFallbacks(IsolatedConfigTest):
         self.assertIn("periods", tt)
 
 
+class TeacherNameResolution(IsolatedConfigTest):
+    def setUp(self):
+        super().setUp()
+        import fetch_timetable
+        self.ft = fetch_timetable
+
+    def _tt(self, *teachers):
+        return {"periods": [{"period": i + 1, "teacher": t} for i, t in enumerate(teachers)]}
+
+    def test_unique_prefix_match_unmasks(self):
+        tt = self.ft._resolve_teachers(self._tt("김완*"), ["김완선", "이현우"])
+        self.assertEqual(tt["periods"][0]["teacher"], "김완선")
+
+    def test_ambiguous_prefix_keeps_masked(self):
+        tt = self.ft._resolve_teachers(self._tt("김완*"), ["김완선", "김완태"])
+        self.assertEqual(tt["periods"][0]["teacher"], "김완*")
+
+    def test_no_roster_or_no_match_unchanged(self):
+        tt = self.ft._resolve_teachers(self._tt("김완*", "박지*"), ["이현우"])
+        self.assertEqual([p["teacher"] for p in tt["periods"]], ["김완*", "박지*"])
+        tt = self.ft._resolve_teachers(self._tt("김완*"), [])
+        self.assertEqual(tt["periods"][0]["teacher"], "김완*")
+
+    def test_unmasked_names_left_alone(self):
+        tt = self.ft._resolve_teachers(self._tt("이현우", ""), ["이현우식"])
+        self.assertEqual(tt["periods"][0]["teacher"], "이현우")
+
+    def test_cached_fallback_applies_roster(self):
+        config.save_cache_entry("timetable", {
+            "date": "2026-06-12", "weekday_label": "금",
+            "periods": [{"period": 1, "time": "08:40", "subject": "수학", "teacher": "김완*"}],
+        })
+        import requests
+        orig = requests.get
+        def down(*a, **k):
+            raise requests.ConnectionError("down")
+        requests.get = down
+        try:
+            cfg = config.load_config()
+            cfg["teacher_names"] = ["김완선"]
+            tt = self.ft.fetch_today(cfg)
+        finally:
+            requests.get = orig
+        self.assertEqual(tt["periods"][0]["teacher"], "김완선")
+        # 캐시 원본은 마스킹 상태를 유지해야 한다 (명단 수정 시 재매칭 가능)
+        self.assertEqual(config.load_cache()["timetable"]["periods"][0]["teacher"], "김완*")
+
+    def test_config_sanitizes_roster(self):
+        with open(config.CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"teacher_names": ["  김완선 ", "", 42, None, "이현우"]}, f)
+        self.assertEqual(config.load_config()["teacher_names"], ["김완선", "이현우"])
+
+
+class FontScale(IsolatedConfigTest):
+    def test_merge_clamps_and_defaults(self):
+        merged = config._merge_custom_wallpaper({"font_scale": 99})
+        self.assertEqual(merged["font_scale"], config.FONT_SCALE_MAX)
+        merged = config._merge_custom_wallpaper({"font_scale": "abc"})
+        self.assertEqual(merged["font_scale"], 1.0)
+        merged = config._merge_custom_wallpaper({"font_scale": float("nan")})
+        self.assertEqual(merged["font_scale"], 1.0)
+        merged = config._merge_custom_wallpaper({})
+        self.assertEqual(merged["font_scale"], 1.0)
+
+    def test_render_respects_font_scale(self):
+        import render
+        cfg = config.load_config()
+        cfg["custom_wallpaper"]["background_image"] = ""
+        meals = {"중식": ["테스트"]}
+        tt = {"date": "2026-06-13", "weekday_label": "토",
+              "periods": [{"period": 1, "time": "08:40", "subject": "수학", "teacher": "김"}]}
+        # 극단값에서도 두 렌더 경로(TUI/커스텀)가 깨지지 않아야 한다
+        for scale in (config.FONT_SCALE_MIN, 1.0, config.FONT_SCALE_MAX):
+            cfg["custom_wallpaper"]["font_scale"] = scale
+            img = render.render_wallpaper_image(meals, tt, cfg, size=(960, 540))
+            self.assertEqual(img.size, (960, 540), f"TUI path scale={scale}")
+            cfg["custom_wallpaper"]["stickers"] = [{"path": "/missing.png", "rect": [0.1, 0.1, 0.2, 0.2]}]
+            img = render.render_wallpaper_image(meals, tt, cfg, size=(960, 540))
+            self.assertEqual(img.size, (960, 540), f"custom path scale={scale}")
+            cfg["custom_wallpaper"]["stickers"] = []
+
+
 class WallpaperPathLogic(IsolatedConfigTest):
     def test_missing_file_returns_false(self):
         import wallpaper

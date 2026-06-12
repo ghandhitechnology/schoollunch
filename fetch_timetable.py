@@ -13,6 +13,7 @@
 }
 """
 import base64
+import copy
 import datetime
 import json
 import re
@@ -119,6 +120,25 @@ def _decode_week(raw: dict, boot: dict, grade: int, cls: int) -> dict:
     return {"days": days}
 
 
+def _resolve_teachers(timetable: dict, roster: list) -> dict:
+    """컴시간 서버는 교사명을 '김완*'처럼 가려서 보낸다. 설정에 입력한 전체 이름
+    명단에서 접두사가 정확히 한 명과 일치하면 전체 이름으로 바꿔 보여 준다."""
+    if not roster:
+        return timetable
+    for period in timetable.get("periods", []):
+        name = period.get("teacher") or ""
+        if not name.endswith("*"):
+            continue
+        prefix = name.rstrip("*")
+        if not prefix:
+            continue
+        matches = [full for full in roster
+                   if isinstance(full, str) and full.startswith(prefix) and len(full) > len(prefix)]
+        if len(matches) == 1:
+            period["teacher"] = matches[0]
+    return timetable
+
+
 def _target_date(today: datetime.date = None) -> datetime.date:
     """주말이면 다가오는 월요일을 표시 대상으로."""
     d = today or datetime.date.today()
@@ -143,15 +163,16 @@ def fetch_today(cfg: dict, today: datetime.date = None) -> dict:
             "periods": week["days"][target.weekday()],
             "_cached": False,
         }
+        # 캐시에는 원본(마스킹된) 이름을 저장해 명단을 나중에 고쳐도 다시 매칭되게 한다
         config.save_cache_entry("timetable", result)
-        return result
+        return _resolve_teachers(copy.deepcopy(result), cfg.get("teacher_names") or [])
     except Exception as e:
         config.log(f"시간표: 조회 실패 ({e}), 캐시 사용")
         cached = config.load_cache().get("timetable")
         if cached:
-            cached = dict(cached)
+            cached = copy.deepcopy(cached)
             cached["_cached"] = True
-            return cached
+            return _resolve_teachers(cached, cfg.get("teacher_names") or [])
         return {
             "date": target.isoformat(),
             "weekday_label": WEEKDAYS[target.weekday()],
