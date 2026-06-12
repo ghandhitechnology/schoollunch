@@ -59,6 +59,16 @@ THEMES = {
         "scanline_alpha": 0,
         "handdrawn": True,
     },
+    "cyber_terminal": {
+        "bg": (10, 16, 13),
+        "text": (0, 255, 102),
+        "dim": (0, 168, 79),
+        "bright": (162, 255, 210),
+        "accent": (255, 176, 0),
+        "use_background_image": False,
+        "scanline_alpha": 24,
+        "phosphor_glow": True,
+    },
 }
 
 LEFT_RESERVED = 0.23   # 화면 왼쪽 빈 공간 비율 (아이콘 자리)
@@ -251,6 +261,31 @@ def _line_height(font) -> int:
     return max(1, box[3] - box[1] + 4)
 
 
+def _draw_text(draw: ImageDraw.ImageDraw, xy, text: str, font, fill, palette: dict) -> None:
+    x, y = xy
+    if palette.get("phosphor_glow"):
+        if len(fill) == 3:
+            fill_rgba = (fill[0], fill[1], fill[2], 255)
+        else:
+            fill_rgba = fill
+        # Draw offset glows
+        glow_fill = (fill_rgba[0], fill_rgba[1], fill_rgba[2], 64)
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)]:
+            draw.text((x + dx, y + dy), text, font=font, fill=glow_fill)
+    draw.text(xy, text, font=font, fill=fill)
+
+
+def _apply_crt_vignette(img: Image.Image) -> None:
+    W, H = img.size
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    # Simple vignette by drawing concentric rectangles with soft black opacity
+    for i in range(40):
+        alpha = int(50 * (1 - i / 40))
+        draw.rectangle([i, i, W - 1 - i, H - 1 - i], outline=(0, 0, 0, alpha))
+    img.alpha_composite(overlay)
+
+
 def _draw_panel(draw: ImageDraw.ImageDraw, rect_px, title: str, palette: dict, font, title_font):
     x0, y0, x1, y1 = rect_px
     if palette.get("handdrawn"):
@@ -266,7 +301,7 @@ def _draw_panel(draw: ImageDraw.ImageDraw, rect_px, title: str, palette: dict, f
         draw.rounded_rectangle([x0, y0, x1, y1], radius=18, fill=fill, outline=outline, width=2)
     else:
         draw.rectangle([x0, y0, x1, y1], outline=palette["dim"], width=2)
-    draw.text((x0 + 12, y0 + 8), f"[ {title} ]", font=title_font, fill=palette["bright"])
+    _draw_text(draw, (x0 + 12, y0 + 8), f"[ {title} ]", title_font, palette["bright"], palette)
     return y0 + 12 + _line_height(title_font)
 
 
@@ -274,7 +309,7 @@ def _draw_prompt(draw: ImageDraw.ImageDraw, rect_px, cfg: dict, palette: dict, f
     x0, y0, x1, _ = rect_px
     grade, cls = cfg.get("grade", 1), cfg.get("class_num", 1)
     prompt = f"C:\\> hataewook.exe --fetch --class {grade}-{cls} █"
-    draw.text((x0, y0), _truncate_px(prompt, font, x1 - x0), font=font, fill=palette["text"])
+    _draw_text(draw, (x0, y0), _truncate_px(prompt, font, x1 - x0), font, palette["text"], palette)
 
 
 def _draw_timetable_panel(draw: ImageDraw.ImageDraw, rect_px, timetable: dict, cfg: dict, palette: dict, font, title_font):
@@ -297,7 +332,7 @@ def _draw_timetable_panel(draw: ImageDraw.ImageDraw, rect_px, timetable: dict, c
     for line in lines:
         if y + line_h > y1 - pad:
             break
-        draw.text((x0 + pad, y), _truncate_px(line, font, max_w), font=font, fill=palette["text"])
+        _draw_text(draw, (x0 + pad, y), _truncate_px(line, font, max_w), font, palette["text"], palette)
         y += line_h
 
 
@@ -322,7 +357,7 @@ def _draw_meal_panel(draw: ImageDraw.ImageDraw, rect_px, meals: dict, palette: d
         if y + line_h > y1 - pad:
             break
         fill = palette["accent"] if line.startswith("■") else palette["text"]
-        draw.text((x0 + pad, y), _truncate_px(line, font, max_w), font=font, fill=fill)
+        _draw_text(draw, (x0 + pad, y), _truncate_px(line, font, max_w), font, fill, palette)
         y += line_h
 
 
@@ -581,13 +616,16 @@ def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -
             if cell and cell[0] and cell[0] != " ":
                 if palette.get("handdrawn") and cell[0] in BOX_CHARS:
                     continue
-                draw.text((x_off + c * cell_w, y_off + r * cell_h),
-                          cell[0], font=font, fill=cell[1])
+                _draw_text(draw, (x_off + c * cell_w, y_off + r * cell_h),
+                           cell[0], font, cell[1], palette)
 
     scanline_alpha = palette.get("scanline_alpha", 0)
     if scanline_alpha:
         for y in range(0, H, 3):
             draw.line([(0, y), (W, y)], fill=(0, 0, 0, scanline_alpha))
+
+    if palette.get("phosphor_glow"):
+        _apply_crt_vignette(img)
 
     return img
 

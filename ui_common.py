@@ -55,6 +55,17 @@ PALETTES = {
         "button_fg": "#ffffff",
         "canvas_bg": "#f5f0e6",
     },
+    "cyber_terminal": {
+        "bg": "#0a100d",
+        "panel": "#0a100d",
+        "panel_alt": "#080c0a",
+        "fg": "#00ff66",
+        "dim": "#00a84f",
+        "border": "#00ff66",
+        "accent": "#ffb000",
+        "button_fg": "#0a100d",
+        "canvas_bg": "#080c0a",
+    },
 }
 
 _FONT_REGISTERED = False

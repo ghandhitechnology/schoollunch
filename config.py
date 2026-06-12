@@ -14,6 +14,7 @@ UI_THEMES = {
     "white_on_black": "White on black",
     "liquid_glass": "Liquid glass",
     "crayon_sketch": "Crayon sketch",
+    "cyber_terminal": "Cyber Terminal",
 }
 DEFAULT_UI_THEME = "black_on_white"
 
