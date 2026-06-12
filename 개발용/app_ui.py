@@ -241,6 +241,112 @@ def show_app(on_save=None) -> bool:
             b.pack(side=side, padx=(8, 0))
         roster_text.focus_set()
 
+    def edit_dashboard_timetable():
+        meals, timetable = cached_display_data()
+
+        p = palette()
+        dialog = tk.Toplevel(root)
+        dialog.title("시간표 직접 편집")
+        dialog.geometry("460x480")
+        dialog.configure(bg=p["bg"])
+        dialog.transient(root)
+        dialog.grab_set()
+
+        title_lbl = tk.Label(dialog, text="시간표 직접 편집", font=_font(14, "bold"),
+                             bg=p["bg"], fg=p["fg"])
+        title_lbl.pack(pady=(12, 4))
+
+        desc_lbl = tk.Label(dialog, text="교시별 시간, 과목, 교사 이름을 직접 수정합니다.",
+                            font=_font(10), bg=p["bg"], fg=p["dim"])
+        desc_lbl.pack(pady=(0, 12))
+
+        frame_container = tk.Frame(dialog, bg=p["bg"])
+        frame_container.pack(fill="both", expand=True, padx=14, pady=4)
+
+        headers_frame = tk.Frame(frame_container, bg=p["bg"])
+        headers_frame.pack(fill="x", pady=2)
+        tk.Label(headers_frame, text="교시", width=6, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
+        tk.Label(headers_frame, text="시간 (예: 08:40)", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
+        tk.Label(headers_frame, text="과목", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
+        tk.Label(headers_frame, text="교사", width=11, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
+
+        periods = list(timetable.get("periods") or [])
+        while len(periods) < 7:
+            p_num = len(periods) + 1
+            periods.append({
+                "period": p_num,
+                "time": "",
+                "subject": "",
+                "teacher": ""
+            })
+
+        entries = []
+        for period in periods:
+            p_num = period.get("period", 1)
+            time_val = period.get("time") or ""
+            sub_val = period.get("subject") or ""
+            tch_val = period.get("teacher") or ""
+
+            p_frame = tk.Frame(frame_container, bg=p["bg"])
+            p_frame.pack(fill="x", pady=3)
+
+            tk.Label(p_frame, text=f"{p_num}교시", width=6, font=_font(11), bg=p["bg"], fg=p["fg"]).pack(side="left")
+
+            time_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
+                                insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
+                                highlightbackground=p["border"], highlightcolor=p["accent"])
+            time_ent.insert(0, time_val)
+            time_ent.pack(side="left")
+
+            sub_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
+                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
+                               highlightbackground=p["border"], highlightcolor=p["accent"])
+            sub_ent.insert(0, sub_val)
+            sub_ent.pack(side="left", padx=4)
+
+            tch_ent = tk.Entry(p_frame, width=11, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
+                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
+                               highlightbackground=p["border"], highlightcolor=p["accent"])
+            tch_ent.insert(0, tch_val)
+            tch_ent.pack(side="left")
+
+            entries.append((p_num, time_ent, sub_ent, tch_ent))
+
+        def on_save():
+            new_periods = []
+            for p_num, time_ent, sub_ent, tch_ent in entries:
+                time_str = time_ent.get().strip()
+                sub_str = sub_ent.get().strip()
+                tch_str = tch_ent.get().strip()
+                if time_str or sub_str or tch_str:
+                    new_periods.append({
+                        "period": p_num,
+                        "time": time_str,
+                        "subject": sub_str,
+                        "teacher": tch_str
+                    })
+
+            timetable["periods"] = new_periods
+            timetable["_edited"] = True
+
+            config.save_cache_entry("timetable", timetable)
+            dialog.destroy()
+
+            fill_cached_data()
+            request_preview(30)
+            status_var.set("시간표가 직접 수정되었습니다 (바탕화면 적용을 눌러야 완전히 반영됩니다)")
+
+        btn_frame = tk.Frame(dialog, bg=p["bg"])
+        btn_frame.pack(fill="x", pady=12, side="bottom")
+
+        cancel_btn = ThemedButton(btn_frame, "취소", dialog.destroy, font=_font(11, "bold"))
+        cancel_btn.set_palette(p)
+        cancel_btn.pack(side="right", padx=(6, 14))
+
+        save_btn = ThemedButton(btn_frame, "확인", on_save, font=_font(11, "bold"))
+        save_btn.set_palette(p)
+        save_btn.pack(side="right", padx=6)
+
     def choose_background():
         path = filedialog.askopenfilename(
             title="배경 이미지 선택",
@@ -457,7 +563,7 @@ def show_app(on_save=None) -> bool:
         style_all()
         request_preview()
 
-    theme_row = row(control, "UI 테마")
+    theme_row = row(control, "생긴거")
     theme_menu = tk.OptionMenu(theme_row, theme_var, *theme_labels.keys(), command=on_theme_change)
     theme_menu.pack(side="left", fill="x", expand=True)
     option_menus.append(theme_menu)
@@ -520,8 +626,16 @@ def show_app(on_save=None) -> bool:
 
     timetable_text = tk.Text(tt_panel, height=9, font=_font(11), relief="flat", wrap="word",
                              borderwidth=0, state="disabled")
-    timetable_text.pack(fill="both", expand=True, padx=10, pady=10)
+    timetable_text.pack(fill="both", expand=True, padx=10, pady=(10, 4))
     remember(timetable_text, "alt")
+
+    tt_btn_frame = tk.Frame(tt_panel)
+    tt_btn_frame.pack(fill="x", side="bottom", padx=10, pady=(0, 10))
+    remember(tt_btn_frame, "panel")
+
+    edit_tt_btn = ThemedButton(tt_btn_frame, "시간표 편집", edit_dashboard_timetable, font=_font(11, "bold"))
+    edit_tt_btn.pack(side="right")
+    buttons.append(edit_tt_btn)
     meal_text = tk.Text(meal_panel, height=9, font=_font(11), relief="flat", wrap="word",
                         borderwidth=0, state="disabled")
     meal_text.pack(fill="both", expand=True, padx=10, pady=10)

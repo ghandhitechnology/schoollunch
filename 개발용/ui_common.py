@@ -12,6 +12,7 @@ import config
 
 PALETTES = {
     "black_on_white": {
+        "theme_name": "black_on_white",
         "bg": "#ffffff",
         "panel": "#ffffff",
         "panel_alt": "#f4f4f4",
@@ -23,6 +24,7 @@ PALETTES = {
         "canvas_bg": "#f2f2f2",
     },
     "white_on_black": {
+        "theme_name": "white_on_black",
         "bg": "#000000",
         "panel": "#000000",
         "panel_alt": "#101010",
@@ -34,17 +36,19 @@ PALETTES = {
         "canvas_bg": "#111111",
     },
     "crayon_sketch": {
+        "theme_name": "crayon_sketch",
         "bg": "#fdfbf7",
         "panel": "#fdfbf7",
         "panel_alt": "#f5f0e6",
         "fg": "#2c2c2c",
         "dim": "#7c7267",
         "border": "#2c2c2c",
-        "accent": "#e91e63",
+        "accent": "#b27a12",
         "button_fg": "#ffffff",
         "canvas_bg": "#f5f0e6",
     },
     "cyber_terminal": {
+        "theme_name": "cyber_terminal",
         "bg": "#0a100d",
         "panel": "#0a100d",
         "panel_alt": "#080c0a",
@@ -88,26 +92,61 @@ def palette(value):
     return PALETTES[theme_key(value)]
 
 
-class ThemedButton(tk.Label):
+class ThemedButton(tk.Frame):
     """모든 OS에서 테마 색이 그대로 적용되는 평면 버튼 (hover/press/disabled 지원)."""
 
     def __init__(self, parent, text, command, font=None, padx=12, pady=6):
-        super().__init__(parent, text=text, font=font, padx=padx, pady=pady,
-                         cursor="hand2", highlightthickness=1, takefocus=1)
+        super().__init__(parent, bd=0, highlightthickness=0)
         self._command = command
         self._palette = None
         self._enabled = True
         self._selected = False
         self._hover = False
         self._pressed = False
-        self.bind("<Enter>", self._on_enter)
-        self.bind("<Leave>", self._on_leave)
-        self.bind("<ButtonPress-1>", self._on_press)
-        self.bind("<ButtonRelease-1>", self._on_release)
-        self.bind("<Key-Return>", self._on_key_activate)
-        self.bind("<Key-space>", self._on_key_activate)
-        self.bind("<FocusIn>", lambda _event: self._refresh())
-        self.bind("<FocusOut>", lambda _event: self._refresh())
+
+        self.label = tk.Label(
+            self, text=text, font=font, padx=padx, pady=pady,
+            cursor="hand2", borderwidth=0, highlightthickness=0, takefocus=1
+        )
+        self.label.pack(fill="both", expand=True, padx=1, pady=1)
+
+        self.label.bind("<Enter>", self._on_enter)
+        self.label.bind("<Leave>", self._on_leave)
+        self.label.bind("<ButtonPress-1>", self._on_press)
+        self.label.bind("<ButtonRelease-1>", self._on_release)
+        self.label.bind("<Key-Return>", self._on_key_activate)
+        self.label.bind("<Key-space>", self._on_key_activate)
+        self.label.bind("<FocusIn>", lambda _event: self._refresh())
+        self.label.bind("<FocusOut>", lambda _event: self._refresh())
+
+    def cget(self, key):
+        if key == "text":
+            return self.label.cget("text")
+        elif key == "font":
+            return self.label.cget("font")
+        elif key == "fg" or key == "foreground":
+            return self.label.cget("fg")
+        elif key == "bg" or key == "background":
+            return self.label.cget("bg")
+        return super().cget(key)
+
+    def configure(self, cnf=None, **kw):
+        if cnf is not None:
+            if isinstance(cnf, dict):
+                kw.update(cnf)
+            else:
+                return super().configure(cnf)
+        
+        label_keys = {"text", "font", "fg", "foreground", "padx", "pady"}
+        label_kw = {k: v for k, v in kw.items() if k in label_keys}
+        frame_kw = {k: v for k, v in kw.items() if k not in label_keys}
+        
+        if label_kw:
+            self.label.configure(**label_kw)
+        if frame_kw:
+            super().configure(**frame_kw)
+
+    config = configure
 
     def set_palette(self, p):
         self._palette = p
@@ -115,7 +154,7 @@ class ThemedButton(tk.Label):
 
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
-        self.configure(cursor="hand2" if self._enabled else "arrow")
+        self.label.configure(cursor="hand2" if self._enabled else "arrow")
         self._refresh()
 
     def set_selected(self, selected):
@@ -126,6 +165,25 @@ class ThemedButton(tk.Label):
         p = self._palette
         if not p or not self.winfo_exists():
             return
+        if p.get("theme_name") == "cyber_terminal":
+            bg = p["panel"]
+            if not self._enabled:
+                fg = p["dim"]
+                border = "#550000"
+            elif self._selected or (self._pressed and self._hover):
+                fg = "#00ff66"
+                border = "#ff0000"
+            elif self._hover:
+                fg = "#00ff66"
+                border = "#ff3333"
+            else:
+                fg = "#00ff66"
+                border = "#ff0000"
+            
+            super().configure(bg=border)
+            self.label.configure(bg=bg, fg=fg)
+            return
+
         if not self._enabled:
             bg, fg = p["panel_alt"], p["dim"]
         elif self._selected or (self._pressed and self._hover):
@@ -134,8 +192,9 @@ class ThemedButton(tk.Label):
             bg, fg = p["dim"], p["button_fg"]
         else:
             bg, fg = p["accent"], p["button_fg"]
-        self.configure(bg=bg, fg=fg,
-                       highlightbackground=p["border"], highlightcolor=p["border"])
+            
+        super().configure(bg=p["border"])
+        self.label.configure(bg=bg, fg=fg)
 
     def _on_enter(self, _event):
         self._hover = True
@@ -147,6 +206,7 @@ class ThemedButton(tk.Label):
 
     def _on_press(self, _event):
         if self._enabled:
+            self.label.focus_set()
             self._pressed = True
             self._refresh()
 
@@ -156,7 +216,7 @@ class ThemedButton(tk.Label):
         self._refresh()
         if not (self._enabled and was_pressed and self._command):
             return
-        if 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
+        if 0 <= event.x <= self.label.winfo_width() and 0 <= event.y <= self.label.winfo_height():
             self._command()
 
     def _on_key_activate(self, _event):

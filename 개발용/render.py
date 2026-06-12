@@ -382,10 +382,10 @@ def _apply_custom_layers(img: Image.Image, cfg: dict, size):
             continue
         try:
             original = Image.open(sticker_path).convert("RGBA")
+            original.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
             angle = config._safe_angle(sticker.get("angle", 0))
             if angle:
                 original = original.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
-            original.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
             paste_x = x0 + ((x1 - x0) - original.width) // 2
             paste_y = y0 + ((y1 - y0) - original.height) // 2
             img.alpha_composite(original, (paste_x, paste_y))

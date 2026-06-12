@@ -6,6 +6,7 @@
 종료 코드 0 = 통과.
 """
 import gc
+import math
 import os
 import shutil
 import sys
@@ -153,10 +154,69 @@ def script(root):
     editor.update_overlays()
     editor.rotate_selected_sticker(15)
     check(editor.custom["stickers"][sticker_count]["angle"] == 15, "selected sticker rotated")
+
+    # 10b. 스티커 드래그 회전 테스트
+    sticker = editor.custom["stickers"][sticker_count]
+    s_rect = list(sticker["rect"])
+    angle_before = sticker["angle"]
+    x0, y0, x1, y1 = editor.rect_to_canvas(s_rect)
+    cx = (x0 + x1) / 2
+    cy = (y0 + y1) / 2
+    rad = math.radians(angle_before)
+    dx = 0
+    dy = (y0 - 25) - cy
+    rx = cx + dx * math.cos(rad) - dy * math.sin(rad)
+    ry = cy + dx * math.sin(rad) + dy * math.cos(rad)
+
+    cv.event_generate("<ButtonPress-1>", x=int(rx), y=int(ry))
+    check(editor.drag is not None and editor.drag["type"] == "rotate", "drag mode is rotate after press on handle")
+    cv.event_generate("<B1-Motion>", x=int(rx + 50), y=int(ry + 20))
+    angle_after = editor.custom["stickers"][sticker_count]["angle"]
+    check(angle_after != angle_before, f"dragged rotate handle changed sticker angle from {angle_before} to {angle_after}")
+    cv.event_generate("<ButtonRelease-1>", x=int(rx + 50), y=int(ry + 20))
+
     editor.delete_selected_sticker()
     check(len(editor.custom.get("stickers", [])) == sticker_count, "sticker deleted via method")
     editor.delete_selected_sticker()  # 스티커 미선택 → 안내 메시지, 크래시 없어야 함
     check("선택" in status() or "삭제" in status(), "delete without selection is graceful")
+
+    # 10c. 시간표 직접 편집 테스트
+    editor.edit_timetable()
+    dialog = None
+    for child in root.winfo_children():
+        if isinstance(child, tk.Toplevel) and "시간표" in child.title():
+            dialog = child
+            break
+    check(dialog is not None, "timetable editor dialog popped up")
+    if dialog:
+        entries = []
+        def find_entries(w):
+            for c in w.winfo_children():
+                if isinstance(c, tk.Entry):
+                    entries.append(c)
+                find_entries(c)
+        find_entries(dialog)
+        check(len(entries) >= 3, "editor dialog has Entry widgets")
+        if len(entries) >= 3:
+            entries[1].delete(0, "end")
+            entries[1].insert(0, "인공지능")
+
+        ok_btn = None
+        for child in dialog.winfo_children():
+            if isinstance(child, tk.Frame):
+                for btn in child.winfo_children():
+                    if isinstance(btn, ThemedButton) and btn.cget("text") == "확인":
+                        ok_btn = btn
+                        break
+        check(ok_btn is not None, "OK button found in dialog")
+        if ok_btn:
+            ok_btn._command()
+
+        cached_tt = _config.load_cache().get("timetable")
+        check(cached_tt is not None, "timetable cached after edit")
+        if cached_tt:
+            check(cached_tt.get("_edited") is True, "timetable marked as _edited")
+            check(cached_tt["periods"][0]["subject"] == "인공지능", "edited subject saved to cache")
 
     # 11. 에디터 키 바인딩이 살아 있는지 + 뒤로가기
     #    (event_generate 키 입력은 OS 포커스가 필요해 백그라운드 실행에서 못 쓴다)
@@ -180,7 +240,43 @@ def script(root):
     yield ("editor reopened", lambda: editor.frame.winfo_ismapped(), 5)
     check(editor.frame.winfo_ismapped(), "editor reopens cleanly")
     editor.back()
-    yield ("editor closed again", lambda: not editor.frame.winfo_ismapped(), 5)
+    # 13b. 메인 대시보드 시간표 편집 테스트
+    buttons_by_text(root)["시간표 편집"]._command()
+    dashboard_dialog = None
+    for child in root.winfo_children():
+        if isinstance(child, tk.Toplevel) and "시간표" in child.title():
+            dashboard_dialog = child
+            break
+    check(dashboard_dialog is not None, "dashboard timetable editor dialog popped up")
+    if dashboard_dialog:
+        entries = []
+        def find_entries(w):
+            for c in w.winfo_children():
+                if isinstance(c, tk.Entry):
+                    entries.append(c)
+                find_entries(c)
+        find_entries(dashboard_dialog)
+        check(len(entries) >= 3, "dashboard editor dialog has Entry widgets")
+        if len(entries) >= 3:
+            entries[1].delete(0, "end")
+            entries[1].insert(0, "파이썬")
+
+        ok_btn = None
+        for child in dashboard_dialog.winfo_children():
+            if isinstance(child, tk.Frame):
+                for btn in child.winfo_children():
+                    if isinstance(btn, ThemedButton) and btn.cget("text") == "확인":
+                        ok_btn = btn
+                        break
+        check(ok_btn is not None, "OK button found in dashboard dialog")
+        if ok_btn:
+            ok_btn._command()
+
+        cached_tt = _config.load_cache().get("timetable")
+        check(cached_tt is not None, "timetable cached after dashboard edit")
+        if cached_tt:
+            check(cached_tt.get("_edited") is True, "timetable marked as _edited after dashboard edit")
+            check(cached_tt["periods"][0]["subject"] == "파이썬", "dashboard edited subject saved to cache")
 
     # 14. 읽기 전용 텍스트가 복사 가능(=disabled) 상태인지
     texts = find_widgets(root, tk.Text)

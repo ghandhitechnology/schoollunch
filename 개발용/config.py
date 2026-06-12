@@ -10,10 +10,10 @@ import copy
 APP_NAME = "하태욱프로그램"
 
 UI_THEMES = {
-    "black_on_white": "Black on white",
-    "white_on_black": "White on black",
-    "crayon_sketch": "Crayon sketch",
-    "cyber_terminal": "Cyber Terminal",
+    "black_on_white": "흑백",
+    "white_on_black": "백흑",
+    "crayon_sketch": "감성",
+    "cyber_terminal": "컴퓨터",
 }
 DEFAULT_UI_THEME = "black_on_white"
 VALID_GRADES = (1,)

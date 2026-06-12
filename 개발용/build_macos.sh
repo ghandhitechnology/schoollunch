@@ -10,7 +10,7 @@ if [ -x ".venv/bin/python" ]; then
   PYTHON_BIN=".venv/bin/python"
 fi
 
-OUTPUT_DIR="dist-macos"
+OUTPUT_DIR="dist"
 WORK_DIR="build-macos"
 APP_PATH="$OUTPUT_DIR/하태욱 프로그램.app"
 APP_EXEC="$APP_PATH/Contents/MacOS/하태욱 프로그램"

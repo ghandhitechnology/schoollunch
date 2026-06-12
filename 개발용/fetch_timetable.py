@@ -153,6 +153,17 @@ def fetch_today(cfg: dict, today: datetime.date = None) -> dict:
     target = _target_date(today)
 
     try:
+        cached = config.load_cache().get("timetable")
+        if (cached and cached.get("_edited")
+                and cached.get("date") == target.isoformat()
+                and cached.get("grade") == grade
+                and cached.get("class_num") == cls):
+            config.log("수정된 캐시 시간표 사용")
+            return _resolve_teachers(copy.deepcopy(cached), cfg.get("teacher_names") or [])
+    except Exception as e:
+        config.log(f"수정된 캐시 시간표 검사 실패: {e!r}")
+
+    try:
         boot = _bootstrap()
         code = get_school_code(cfg, boot)
         raw = _fetch_raw(boot, code)
@@ -161,6 +172,8 @@ def fetch_today(cfg: dict, today: datetime.date = None) -> dict:
             "date": target.isoformat(),
             "weekday_label": WEEKDAYS[target.weekday()],
             "periods": week["days"][target.weekday()],
+            "grade": grade,
+            "class_num": cls,
             "_cached": False,
         }
         # 캐시에는 원본(마스킹된) 이름을 저장해 명단을 나중에 고쳐도 다시 매칭되게 한다

@@ -7,6 +7,7 @@
 백그라운드 스레드에서 디바운스로 따라온다. Tk 접근은 전부 메인 스레드 큐를 거친다.
 """
 import copy
+import math
 import os
 import queue
 import threading
@@ -124,7 +125,8 @@ class CustomWallpaperEditor:
             button = self._button(row2, label, lambda m=mode: self.set_mode(m))
             button.pack(side="left", padx=(0, 6))
             self.mode_buttons[mode] = button
-        self._button(row2, "드로잉 지움", self.clear_drawing).pack(side="left", padx=(0, 14))
+        self._button(row2, "드로잉 지움", self.clear_drawing).pack(side="left", padx=(0, 6))
+        self._button(row2, "시간표 편집", self.edit_timetable).pack(side="left", padx=(0, 14))
 
         swatch = tk.Canvas(row2, width=32, height=32, highlightthickness=0)
         swatch.pack(side="left")
@@ -142,6 +144,7 @@ class CustomWallpaperEditor:
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<Double-Button-1>", self.on_double_click)
         self.apply_style()
         self.root.after(25, self.pump_ui_queue)
 
@@ -481,17 +484,50 @@ class CustomWallpaperEditor:
                            p["accent"] if self.selected == ("panel", name) else p["border"])
         for idx, sticker in enumerate(self.custom.get("stickers", [])):
             angle = round(config._safe_angle(sticker.get("angle", 0)))
+            is_selected = (self.selected == ("sticker", idx))
             self.draw_rect(sticker.get("rect", [0, 0, 0.1, 0.1]), f"스티커 {idx + 1} · {angle}°",
-                           p["accent"] if self.selected == ("sticker", idx) else p["dim"])
+                           p["accent"] if is_selected else p["dim"],
+                           angle=angle, show_rotate=is_selected)
         self.update_rotation_label()
 
-    def draw_rect(self, rect, label, color):
+    def draw_rect(self, rect, label, color, angle=0, show_rotate=False):
         x0, y0, x1, y1 = self.rect_to_canvas(rect)
-        self.canvas.create_rectangle(x0, y0, x1, y1, outline=color, width=2, tags="overlay")
-        self.canvas.create_text(x0 + 6, y0 + 6, text=label, anchor="nw", fill=color,
+        cx = (x0 + x1) / 2
+        cy = (y0 + y1) / 2
+
+        def rotate_pt(px, py):
+            rad = math.radians(angle)
+            dx = px - cx
+            dy = py - cy
+            rx = cx + dx * math.cos(rad) - dy * math.sin(rad)
+            ry = cy + dx * math.sin(rad) + dy * math.cos(rad)
+            return rx, ry
+
+        # Four corners
+        p0 = rotate_pt(x0, y0)
+        p1 = rotate_pt(x1, y0)
+        p2 = rotate_pt(x1, y1)
+        p3 = rotate_pt(x0, y1)
+
+        self.canvas.create_polygon(p0[0], p0[1], p1[0], p1[1], p2[0], p2[1], p3[0], p3[1],
+                                    fill="", outline=color, width=2, tags="overlay")
+
+        # Label at top-left rotated corner
+        self.canvas.create_text(p0[0] + 6, p0[1] + 6, text=label, anchor="nw", fill=color,
                                 font=_font(10, "bold"), tags="overlay")
-        self.canvas.create_rectangle(x1 - HANDLE_PX, y1 - HANDLE_PX, x1, y1,
+
+        # Resize handle at bottom-right rotated corner
+        self.canvas.create_rectangle(p2[0] - HANDLE_PX/2, p2[1] - HANDLE_PX/2,
+                                     p2[0] + HANDLE_PX/2, p2[1] + HANDLE_PX/2,
                                      fill=color, outline=color, tags="overlay")
+
+        # Rotate handle at top-middle rotated corner (only if show_rotate is True)
+        if show_rotate:
+            tm = rotate_pt(cx, y0)
+            h_rot = rotate_pt(cx, y0 - 25)
+            self.canvas.create_line(tm[0], tm[1], h_rot[0], h_rot[1], fill=color, width=2, tags="overlay")
+            self.canvas.create_oval(h_rot[0] - 6, h_rot[1] - 6, h_rot[0] + 6, h_rot[1] + 6,
+                                    fill=color, outline=color, tags="overlay")
 
     def rect_to_canvas(self, rect):
         ox, oy, pw, ph = self.preview_box
@@ -525,7 +561,20 @@ class CustomWallpaperEditor:
 
     def hit_test(self, nx, ny):
         for idx in reversed(range(len(self.custom.get("stickers", [])))):
-            if _rect_contains(_clamp_rect(self.custom["stickers"][idx]["rect"]), nx, ny):
+            sticker = self.custom["stickers"][idx]
+            rect = _clamp_rect(sticker["rect"])
+            angle = config._safe_angle(sticker.get("angle", 0))
+
+            # Rotated rect contains test
+            rx, ry, rw, rh = rect
+            cx = rx + rw / 2
+            cy = ry + rh / 2
+            rad = math.radians(-angle)
+            dx = nx - cx
+            dy = ny - cy
+            local_x = cx + dx * math.cos(rad) - dy * math.sin(rad)
+            local_y = cy + dx * math.sin(rad) + dy * math.cos(rad)
+            if rx <= local_x <= rx + rw and ry <= local_y <= ry + rh:
                 return ("sticker", idx)
         for name, rect in self.custom.get("layout", {}).items():
             if _rect_contains(_clamp_rect(rect), nx, ny):
@@ -542,13 +591,106 @@ class CustomWallpaperEditor:
             self.drag = {"type": self.mode.get(), "last": (nx, ny)}
             self.draw_at(nx, ny, nx, ny)
             return
+
+        # Check if we clicked on the handles of the currently selected sticker
+        kind, key = self.selected
+        if kind == "sticker" and 0 <= key < len(self.custom.get("stickers", [])):
+            sticker = self.custom["stickers"][key]
+            rect = _clamp_rect(sticker["rect"])
+            angle = config._safe_angle(sticker.get("angle", 0))
+            x0, y0, x1, y1 = self.rect_to_canvas(rect)
+            cx = (x0 + x1) / 2
+            cy = (y0 + y1) / 2
+
+            def rotate_pt(px, py):
+                rad = math.radians(angle)
+                dx = px - cx
+                dy = py - cy
+                rx = cx + dx * math.cos(rad) - dy * math.sin(rad)
+                ry = cy + dx * math.sin(rad) + dy * math.cos(rad)
+                return rx, ry
+
+            # Rotated resize handle (bottom-right)
+            rx_resize, ry_resize = rotate_pt(x1, y1)
+            # Rotated rotate handle (top-middle - 25px)
+            rx_rotate, ry_rotate = rotate_pt(cx, y0 - 25)
+
+            if math.hypot(event.x - rx_rotate, event.y - ry_rotate) <= 12:
+                self.drag = {
+                    "type": "rotate",
+                    "center": (cx, cy),
+                    "start_angle": angle,
+                    "start_mouse_angle": math.atan2(event.y - cy, event.x - cx)
+                }
+                return
+            elif math.hypot(event.x - rx_resize, event.y - ry_resize) <= HANDLE_PX:
+                self.drag = {
+                    "type": "resize",
+                    "start": (nx, ny),
+                    "rect": rect,
+                    "angle": angle
+                }
+                return
+
+        elif kind == "panel":
+            rect = _clamp_rect(self.current_rect())
+            x0, y0, x1, y1 = self.rect_to_canvas(rect)
+            if abs(event.x - x1) <= HANDLE_PX * 2 and abs(event.y - y1) <= HANDLE_PX * 2:
+                self.drag = {
+                    "type": "resize",
+                    "start": (nx, ny),
+                    "rect": rect,
+                    "angle": 0
+                }
+                return
+
         hit = self.hit_test(nx, ny)
         if hit:
             self.selected = hit
             rect = _clamp_rect(self.current_rect())
             x0, y0, x1, y1 = self.rect_to_canvas(rect)
-            action = "resize" if abs(event.x - x1) <= HANDLE_PX * 2 and abs(event.y - y1) <= HANDLE_PX * 2 else "move"
-            self.drag = {"type": action, "start": (nx, ny), "rect": rect}
+            h_kind, h_key = hit
+            if h_kind == "sticker":
+                sticker = self.custom["stickers"][h_key]
+                s_rect = _clamp_rect(sticker["rect"])
+                s_angle = config._safe_angle(sticker.get("angle", 0))
+                sx0, sy0, sx1, sy1 = self.rect_to_canvas(s_rect)
+                scx = (sx0 + sx1) / 2
+                scy = (sy0 + sy1) / 2
+
+                rad = math.radians(s_angle)
+                dx = sx1 - scx
+                dy = sy1 - scy
+                rx_resize = scx + dx * math.cos(rad) - dy * math.sin(rad)
+                ry_resize = scy + dx * math.sin(rad) + dy * math.cos(rad)
+
+                if math.hypot(event.x - rx_resize, event.y - ry_resize) <= HANDLE_PX:
+                    self.drag = {
+                        "type": "resize",
+                        "start": (nx, ny),
+                        "rect": s_rect,
+                        "angle": s_angle
+                    }
+                else:
+                    self.drag = {
+                        "type": "move",
+                        "start": (nx, ny),
+                        "rect": s_rect
+                    }
+            else:
+                if abs(event.x - x1) <= HANDLE_PX * 2 and abs(event.y - y1) <= HANDLE_PX * 2:
+                    self.drag = {
+                        "type": "resize",
+                        "start": (nx, ny),
+                        "rect": rect,
+                        "angle": 0
+                    }
+                else:
+                    self.drag = {
+                        "type": "move",
+                        "start": (nx, ny),
+                        "rect": rect
+                    }
         else:
             self.drag = None
         self.update_overlays()
@@ -562,12 +704,36 @@ class CustomWallpaperEditor:
             self.draw_at(lx, ly, nx, ny)
             self.drag["last"] = (nx, ny)
             return
+
+        if self.drag["type"] == "rotate":
+            cx, cy = self.drag["center"]
+            start_angle = self.drag["start_angle"]
+            start_mouse_angle = self.drag["start_mouse_angle"]
+            current_mouse_angle = math.atan2(event.y - cy, event.x - cx)
+            delta_deg = math.degrees(current_mouse_angle - start_mouse_angle)
+            sticker = self.selected_sticker()
+            if sticker:
+                sticker["angle"] = config._safe_angle(start_angle + delta_deg)
+                self.update_rotation_label()
+                self.update_overlays()
+                self.request_preview()
+            return
+
         sx, sy = self.drag["start"]
         x, y, w, h = self.drag["rect"]
         if self.drag["type"] == "move":
             self.set_current_rect([x + nx - sx, y + ny - sy, w, h])
-        else:
-            self.set_current_rect([x, y, w + nx - sx, h + ny - sy])
+        elif self.drag["type"] == "resize":
+            angle = self.drag.get("angle", 0)
+            if angle:
+                rad = math.radians(-angle)
+                dx = nx - sx
+                dy = ny - sy
+                local_dx = dx * math.cos(rad) - dy * math.sin(rad)
+                local_dy = dx * math.sin(rad) + dy * math.cos(rad)
+                self.set_current_rect([x, y, w + local_dx, h + local_dy])
+            else:
+                self.set_current_rect([x, y, w + nx - sx, h + ny - sy])
         self.update_overlays()
         self.request_preview()
 
@@ -575,6 +741,124 @@ class CustomWallpaperEditor:
         if self.drag:
             self.drag = None
             self.request_preview(30)
+
+    def on_double_click(self, event):
+        if self.saving:
+            return
+        nx, ny = self.canvas_to_norm(event.x, event.y)
+        hit = self.hit_test(nx, ny)
+        if hit:
+            self.selected = hit
+            self.update_overlays()
+            kind, key = hit
+            if kind == "panel" and key == "timetable":
+                self.edit_timetable()
+
+    def edit_timetable(self):
+        meals, timetable = self.sample_data()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("시간표 직접 편집")
+        dialog.geometry("460x480")
+        p = self.palette()
+        dialog.configure(bg=p["bg"])
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        title_lbl = tk.Label(dialog, text="시간표 직접 편집", font=_font(14, "bold"),
+                             bg=p["bg"], fg=p["fg"])
+        title_lbl.pack(pady=(12, 4))
+
+        desc_lbl = tk.Label(dialog, text="교시별 시간, 과목, 교사 이름을 직접 수정합니다.",
+                            font=_font(10), bg=p["bg"], fg=p["dim"])
+        desc_lbl.pack(pady=(0, 12))
+
+        frame_container = tk.Frame(dialog, bg=p["bg"])
+        frame_container.pack(fill="both", expand=True, padx=14, pady=4)
+
+        headers_frame = tk.Frame(frame_container, bg=p["bg"])
+        headers_frame.pack(fill="x", pady=2)
+        tk.Label(headers_frame, text="교시", width=6, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
+        tk.Label(headers_frame, text="시간 (예: 08:40)", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
+        tk.Label(headers_frame, text="과목", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
+        tk.Label(headers_frame, text="교사", width=11, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
+
+        periods = list(timetable.get("periods") or [])
+        while len(periods) < 7:
+            p_num = len(periods) + 1
+            periods.append({
+                "period": p_num,
+                "time": "",
+                "subject": "",
+                "teacher": ""
+            })
+
+        entries = []
+        for period in periods:
+            p_num = period.get("period", 1)
+            time_val = period.get("time") or ""
+            sub_val = period.get("subject") or ""
+            tch_val = period.get("teacher") or ""
+
+            p_frame = tk.Frame(frame_container, bg=p["bg"])
+            p_frame.pack(fill="x", pady=3)
+
+            tk.Label(p_frame, text=f"{p_num}교시", width=6, font=_font(11), bg=p["bg"], fg=p["fg"]).pack(side="left")
+
+            time_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
+                                insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
+                                highlightbackground=p["border"], highlightcolor=p["accent"])
+            time_ent.insert(0, time_val)
+            time_ent.pack(side="left")
+
+            sub_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
+                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
+                               highlightbackground=p["border"], highlightcolor=p["accent"])
+            sub_ent.insert(0, sub_val)
+            sub_ent.pack(side="left", padx=4)
+
+            tch_ent = tk.Entry(p_frame, width=11, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
+                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
+                               highlightbackground=p["border"], highlightcolor=p["accent"])
+            tch_ent.insert(0, tch_val)
+            tch_ent.pack(side="left")
+
+            entries.append((p_num, time_ent, sub_ent, tch_ent))
+
+        def on_save():
+            new_periods = []
+            for p_num, time_ent, sub_ent, tch_ent in entries:
+                time_str = time_ent.get().strip()
+                sub_str = sub_ent.get().strip()
+                tch_str = tch_ent.get().strip()
+                if time_str or sub_str or tch_str:
+                    new_periods.append({
+                        "period": p_num,
+                        "time": time_str,
+                        "subject": sub_str,
+                        "teacher": tch_str
+                    })
+
+            timetable["periods"] = new_periods
+            timetable["_edited"] = True
+
+            config.save_cache_entry("timetable", timetable)
+            dialog.destroy()
+
+            self.update_overlays()
+            self.request_preview(30)
+            self.set_status("시간표가 직접 수정되었습니다 (저장을 눌러야 배경화면에 완전히 반영됩니다)")
+
+        btn_frame = tk.Frame(dialog, bg=p["bg"])
+        btn_frame.pack(fill="x", pady=12, side="bottom")
+
+        cancel_btn = ThemedButton(btn_frame, "취소", dialog.destroy, font=_font(11, "bold"))
+        cancel_btn.set_palette(p)
+        cancel_btn.pack(side="right", padx=(6, 14))
+
+        save_btn = ThemedButton(btn_frame, "확인", on_save, font=_font(11, "bold"))
+        save_btn.set_palette(p)
+        save_btn.pack(side="right", padx=6)
 
     def draw_at(self, x0, y0, x1, y1):
         p0 = (round(x0 * EDITOR_SIZE[0]), round(y0 * EDITOR_SIZE[1]))
