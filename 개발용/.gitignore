@@ -8,3 +8,4 @@ dist-macos/
 .DS_Store
 *.tmp
 *.spec
+!windows_build.spec
