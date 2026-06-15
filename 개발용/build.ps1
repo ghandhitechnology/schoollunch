@@ -6,17 +6,30 @@
 
 $ErrorActionPreference = "Stop"
 $OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 스크립트 위치를 기준으로 동작 (어느 폴더에서 실행해도 OK)
+# 스크립트 위치를 기준으로 동작 (어느 폴꺼에서 실행핮어도 OK)
 Set-Location -Path $PSScriptRoot
+
+function Test-Command {
+    param([string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+if (-not (Test-Command "python")) {
+    Write-Host "[오류] python을 찾을 수 없습니다. Python 3.10 이상을 설치하세요." -ForegroundColor Red
+    exit 1
+}
+
+if (-not (Test-Command "pyinstaller")) {
+    Write-Host "[오류] pyinstaller를 찾을 수 없습니다. 'pip install -r requirements.txt'를 실행하세요." -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "[하태욱 프로그램] 빌드를 시작합니다..." -ForegroundColor Green
 
-pyinstaller --onefile --noconsole `
-  --name "하태욱 프로그램" `
-  --icon "assets\icons\app_icon.ico" `
-  --add-data "assets;assets" `
-  main.py
+# 한글 파일명/경로 문제를 피하고 버전·manifest 리소스를 포함하려면 .spec 빌드를 사용한다.
+pyinstaller --noconfirm --clean windows_build.spec
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "빌드 실패 (exit code $LASTEXITCODE)" -ForegroundColor Red
