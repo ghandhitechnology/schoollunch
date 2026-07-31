@@ -10,6 +10,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 from PIL import Image
@@ -113,7 +114,7 @@ class RenderExtremes(IsolatedConfigTest):
     }
 
     def test_all_themes_and_sizes(self):
-        for theme in ("black_on_white", "white_on_black", "crayon_sketch", "cyber_terminal"):
+        for theme in ("black_on_white", "white_on_black", "crayon_sketch", "cyber_terminal", "bulletin_bold"):
             for size in ((320, 180), (800, 600), (1710, 1107), (3840, 2160)):
                 img = self.render.render_wallpaper_image(
                     self.BIG_MEALS, self.BIG_TT, self._cfg(ui_theme=theme), size=size)
@@ -342,6 +343,281 @@ class WallpaperPathLogic(IsolatedConfigTest):
         b = wallpaper._macos_live_path(current=a)
         self.assertNotEqual(a, b)
         self.assertNotEqual(wallpaper._macos_live_path(current=b), a)
+
+
+class NetworkReadiness(unittest.TestCase):
+    def setUp(self):
+        import network
+        self.network = network
+        self._orig_head = network.requests.head
+        self._orig_get = network.requests.get
+
+    def tearDown(self):
+        self.network.requests.head = self._orig_head
+        self.network.requests.get = self._orig_get
+
+    def _neis_ok(self, *a, **k):
+        return object()
+
+    def _comci_ok(self, *a, **k):
+        return object()
+
+    def test_network_ready_requires_both_endpoints(self):
+        self.network.requests.head = self._neis_ok
+
+        def comci_down(*a, **k):
+            raise self.network.requests.ConnectionError("comci down")
+
+        self.network.requests.get = comci_down
+        self.assertFalse(self.network.is_network_ready())
+
+    def test_network_ready_when_both_up(self):
+        self.network.requests.head = self._neis_ok
+        self.network.requests.get = self._comci_ok
+        self.assertTrue(self.network.is_network_ready())
+
+    def test_fetch_with_retries_succeeds_after_failure(self):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise self.network.requests.ConnectionError("transient")
+            return "ok"
+
+        result = self.network.fetch_with_retries(flaky, retries=3, backoff=(0, 0, 0))
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls["n"], 2)
+
+
+class DataFetchEfficiency(unittest.TestCase):
+    def test_cached_school_codes_enable_parallel_fetch(self):
+        import data_fetch
+        barrier = threading.Barrier(2)
+
+        def meal(cfg):
+            barrier.wait(timeout=1)
+            return {"중식": ["밥"]}
+
+        def timetable(cfg):
+            barrier.wait(timeout=1)
+            return {"periods": [{"period": 1}]}
+
+        cfg = {
+            "neis": {"atpt": "E10", "code": "123"},
+            "comcigan_code": 456,
+        }
+        meals, tt = data_fetch.fetch_all(cfg, meal, timetable)
+        self.assertEqual(meals["중식"], ["밥"])
+        self.assertEqual(tt["periods"][0]["period"], 1)
+
+    def test_first_fetch_stays_sequential_while_codes_are_mutable(self):
+        import data_fetch
+        calls = []
+
+        def meal(cfg):
+            calls.append("meal")
+            cfg["neis"] = {"atpt": "E10", "code": "123"}
+            return {}
+
+        def timetable(cfg):
+            calls.append("timetable")
+            return {}
+
+        data_fetch.fetch_all({}, meal, timetable)
+        self.assertEqual(calls, ["meal", "timetable"])
+
+
+class PreviewEfficiency(IsolatedConfigTest):
+    def test_large_preview_renders_at_bounded_resolution(self):
+        import render
+        original = render.render_wallpaper_image
+        calls = []
+
+        def fake_render(meals, timetable, cfg, size=None):
+            calls.append(size)
+            return Image.new("RGB", size, "white")
+
+        render.render_wallpaper_image = fake_render
+        try:
+            img = render.render_preview_image({}, {}, config.load_config(), (1920, 1080))
+        finally:
+            render.render_wallpaper_image = original
+
+        self.assertEqual(calls, [render.PREVIEW_MAX_SIZE])
+        self.assertEqual(img.size, (1920, 1080))
+
+
+class UpdateGuards(IsolatedConfigTest):
+    def setUp(self):
+        super().setUp()
+        import main
+        self.main = main
+        self._orig = {
+            "fetch_meals": main.fetch_meal.fetch_meals,
+            "fetch_today": main.fetch_timetable.fetch_today,
+            "render_wallpaper": main.render.render_wallpaper,
+            "set_wallpaper": main.wallpaper.set_wallpaper,
+            "update": main.update,
+            "intervals": main.BACKGROUND_RETRY_INTERVALS,
+        }
+
+    def tearDown(self):
+        self.main.fetch_meal.fetch_meals = self._orig["fetch_meals"]
+        self.main.fetch_timetable.fetch_today = self._orig["fetch_today"]
+        self.main.render.render_wallpaper = self._orig["render_wallpaper"]
+        self.main.wallpaper.set_wallpaper = self._orig["set_wallpaper"]
+        self.main.update = self._orig["update"]
+        self.main.BACKGROUND_RETRY_INTERVALS = self._orig["intervals"]
+        super().tearDown()
+
+    def test_data_is_usable_live_or_cached_content(self):
+        live_meals = {"_cached": False, "중식": ["밥"]}
+        empty_tt = {"_cached": True, "periods": []}
+        self.assertTrue(self.main.data_is_usable(live_meals, empty_tt))
+
+        cached_meals = {"_cached": True}
+        cached_tt = {"_cached": True, "periods": [{"period": 1, "subject": "수학"}]}
+        self.assertTrue(self.main.data_is_usable(cached_meals, cached_tt))
+
+        both_empty = {"_cached": True}, {"_cached": True, "periods": []}
+        self.assertFalse(self.main.data_is_usable(*both_empty))
+
+    def test_update_skips_apply_when_empty_cache(self):
+        applied = []
+        rendered = []
+        self.main.fetch_meal.fetch_meals = lambda cfg: {"_cached": True}
+        self.main.fetch_timetable.fetch_today = lambda cfg: {"_cached": True, "periods": []}
+        self.main.render.render_wallpaper = lambda *a, **k: rendered.append(True) or config.WALLPAPER_PATH
+        self.main.wallpaper.set_wallpaper = lambda path: applied.append(path) or True
+
+        path = self.main.update(apply_wallpaper=True, force=False)
+
+        self.assertIsNone(path)
+        self.assertEqual(applied, [])
+        self.assertEqual(rendered, [])
+
+    def test_update_applies_when_live_data(self):
+        applied = []
+        self.main.fetch_meal.fetch_meals = lambda cfg: {"_cached": False, "중식": ["밥"]}
+        self.main.fetch_timetable.fetch_today = lambda cfg: {"_cached": True, "periods": []}
+        self.main.render.render_wallpaper = lambda *a, **k: config.WALLPAPER_PATH
+        self.main.wallpaper.set_wallpaper = lambda path: applied.append(path) or True
+
+        path = self.main.update(apply_wallpaper=True, force=False)
+
+        self.assertEqual(path, config.WALLPAPER_PATH)
+        self.assertEqual(applied, [config.WALLPAPER_PATH])
+
+    def test_update_force_applies_even_when_empty(self):
+        applied = []
+        self.main.fetch_meal.fetch_meals = lambda cfg: {"_cached": True}
+        self.main.fetch_timetable.fetch_today = lambda cfg: {"_cached": True, "periods": []}
+        self.main.render.render_wallpaper = lambda *a, **k: config.WALLPAPER_PATH
+        self.main.wallpaper.set_wallpaper = lambda path: applied.append(path) or True
+
+        path = self.main.update(apply_wallpaper=True, force=True)
+
+        self.assertEqual(path, config.WALLPAPER_PATH)
+        self.assertEqual(applied, [config.WALLPAPER_PATH])
+
+    def test_background_retry_stops_on_success(self):
+        calls = {"n": 0}
+
+        def fake_update(apply_wallpaper=True, force=False):
+            calls["n"] += 1
+            return config.WALLPAPER_PATH if calls["n"] >= 2 else None
+
+        self.main.update = fake_update
+        self.main.BACKGROUND_RETRY_INTERVALS = (0, 0)
+        self.main._retry_stop.clear()
+        self.main._background_retry_worker(apply_wallpaper=True)
+        self.assertEqual(calls["n"], 2)
+
+
+class AutostartWindows(unittest.TestCase):
+    def test_windows_enable_uses_task_scheduler(self):
+        import autostart
+        if sys.platform != "win32":
+            created = []
+
+            def fake_run(cmd, **kwargs):
+                created.append(cmd)
+                class Result:
+                    returncode = 0
+                return Result()
+
+            autostart.subprocess.run = fake_run
+            autostart._windows_remove_registry_run = lambda: None
+            try:
+                autostart._windows_enable()
+            finally:
+                import subprocess
+                autostart.subprocess.run = subprocess.run
+
+            self.assertTrue(created)
+            self.assertIn("/Create", created[0])
+            self.assertIn(autostart.TASK_NAME, created[0])
+            return
+
+        self.skipTest("Windows-only live task registration")
+
+
+class BulletinThemeStress(IsolatedConfigTest):
+    """게시판 테마: 풀 시간표·급식에서도 렌더가 깨지지 않아야 한다."""
+
+    FULL_TT = {
+        "date": "2026-07-11", "weekday_label": "금",
+        "periods": [
+            {"period": i, "time": f"0{7 + i}:40" if i < 3 else f"{7 + i}:40",
+             "subject": f"과목이름아주김{i}", "teacher": f"김선생{i}"}
+            for i in range(1, 9)
+        ],
+    }
+    HEAVY_MEALS = {
+        "조식": [f"조식메뉴{i}" for i in range(1, 6)],
+        "중식": [f"중식메뉴{i}" for i in range(1, 13)],
+        "석식": [f"석식메뉴{i}" for i in range(1, 8)],
+    }
+
+    def setUp(self):
+        super().setUp()
+        import render
+        self.render = render
+
+    def test_theme_registered_in_config(self):
+        self.assertIn("bulletin_bold", config.UI_THEMES)
+        self.assertEqual(config.UI_THEMES["bulletin_bold"], "게시판")
+
+    def test_bulletin_renders_extreme_at_common_resolutions(self):
+        cfg = config.load_config()
+        cfg["ui_theme"] = "bulletin_bold"
+        for size in ((1366, 768), (1920, 1080), (2560, 1440), (3840, 2160)):
+            with self.subTest(size=size):
+                img = self.render.render_wallpaper_image(
+                    self.HEAVY_MEALS, self.FULL_TT, cfg, size=size)
+                self.assertEqual(img.size, size)
+
+    def test_bulletin_meal_compression_when_overflow(self):
+        sections = self.render._bulletin_meal_sections(self.HEAVY_MEALS, per_section_limit=3)
+        joined = " ".join(" ".join(items) for _label, items in sections)
+        self.assertIn("외", joined)
+
+    def test_bulletin_font_shrink_for_tiny_height(self):
+        cfg = config.load_config()
+        cfg["ui_theme"] = "bulletin_bold"
+        img = self.render.render_wallpaper_image(
+            self.HEAVY_MEALS, self.FULL_TT, cfg, size=(1280, 720))
+        self.assertEqual(img.size, (1280, 720))
+
+    def test_bulletin_saves_preview_png(self):
+        cfg = config.load_config()
+        cfg["ui_theme"] = "bulletin_bold"
+        out = self.render.render_wallpaper(
+            self.HEAVY_MEALS, self.FULL_TT, cfg,
+            size=(1920, 1080), out_path=config.WALLPAPER_PATH)
+        self.assertTrue(os.path.exists(out))
+        self.assertGreater(os.path.getsize(out), 1000)
 
 
 class UiFormatting(unittest.TestCase):

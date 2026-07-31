@@ -59,6 +59,19 @@ PALETTES = {
         "button_fg": "#0a100d",
         "canvas_bg": "#080c0a",
     },
+    "bulletin_bold": {
+        "theme_name": "bulletin_bold",
+        "bg": "#F5F0E8",
+        "panel": "#FFFDF8",
+        "panel_alt": "#F5F0E8",
+        "fg": "#111111",
+        "dim": "#555555",
+        "border": "#111111",
+        "accent": "#111111",
+        "accent_highlight": "#FFE600",
+        "button_fg": "#111111",
+        "canvas_bg": "#F5F0E8",
+    },
 }
 
 _FONT_REGISTERED = False
@@ -181,6 +194,25 @@ class ThemedButton(tk.Frame):
                 border = "#ff0000"
             
             super().configure(bg=border)
+            self.label.configure(bg=bg, fg=fg)
+            return
+
+        if p.get("theme_name") == "bulletin_bold":
+            if not self._enabled:
+                bg, fg, border = p["panel_alt"], p["dim"], p["border"]
+            elif self._selected or (self._pressed and self._hover):
+                bg = p.get("accent_highlight", "#FFE600")
+                fg = p["button_fg"]
+                border = p["border"]
+            elif self._hover:
+                bg = p["panel"]
+                fg = p["fg"]
+                border = p.get("accent_highlight", "#FFE600")
+            else:
+                bg = p["panel"]
+                fg = p["fg"]
+                border = p["border"]
+            super().configure(bg=border, highlightthickness=2 if self._hover else 0)
             self.label.configure(bg=bg, fg=fg)
             return
 

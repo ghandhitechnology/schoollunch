@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Full tkinter application UI for configuring, generating, and applying wallpaper."""
+import copy
 import queue
 import threading
 import tkinter as tk
@@ -10,6 +11,7 @@ from PIL import ImageTk
 import autostart
 import config
 from custom_editor import CustomWallpaperEditor
+import data_fetch
 import fetch_meal
 import fetch_timetable
 import render
@@ -64,6 +66,10 @@ def show_app(on_save=None) -> bool:
     option_menus = []
     editor_holder = {}
     ui_queue = queue.Queue()
+    display_state = {
+        "meals": {},
+        "timetable": {"date": "", "weekday_label": "", "periods": []},
+    }
 
     def palette():
         return PALETTES[theme_labels.get(theme_var.get(), config.DEFAULT_UI_THEME)]
@@ -127,13 +133,13 @@ def show_app(on_save=None) -> bool:
         except (RuntimeError, tk.TclError):
             return
         try:
-            root.after(25, pump_ui_queue)
+            root.after(50, pump_ui_queue)
         except (RuntimeError, tk.TclError):
             return
 
     def current_config():
         """저장하지 않고 현재 UI 상태를 설정 dict로 만든다 (미리보기용)."""
-        latest = config.load_config()
+        latest = copy.deepcopy(cfg)
         grade, cls = class_var.get().split("-")
         latest["grade"], latest["class_num"] = int(grade), int(cls)
         latest["background_image"] = bg_var.get()
@@ -144,6 +150,11 @@ def show_app(on_save=None) -> bool:
 
     def collect_config():
         latest = current_config()
+        persisted = config.load_config()
+        # 백그라운드 fetch가 새로 알아낸 코드/캐시 설정을 UI 저장이 지우지 않게 한다.
+        latest["neis"] = persisted.get("neis") or latest.get("neis") or {}
+        latest["comcigan_code"] = (
+            persisted.get("comcigan_code") or latest.get("comcigan_code") or 0)
         latest["configured"] = True
         cfg.clear()
         cfg.update(latest)
@@ -184,6 +195,9 @@ def show_app(on_save=None) -> bool:
     def show_main():
         if "editor" in editor_holder:
             editor_holder["editor"].hide()
+        latest = config.load_config()
+        cfg.clear()
+        cfg.update(latest)
         outer.pack(fill="both", expand=True, padx=18, pady=18)
         status_var.set("준비됨")
         request_preview(50)  # 에디터에서 레이아웃이 바뀌었을 수 있다
@@ -371,22 +385,27 @@ def show_app(on_save=None) -> bool:
         widget.configure(state="disabled")
 
     def fill_data(meals, timetable):
+        display_state["meals"] = copy.deepcopy(meals)
+        display_state["timetable"] = copy.deepcopy(timetable)
         _set_text(timetable_text, "\n".join(format_timetable_lines(timetable)))
         _set_text(meal_text, "\n".join(format_meal_lines(meals)))
 
-    def cached_display_data():
-        """캐시 데이터를 읽어 교사 명단 매칭까지 적용한다 (표시/미리보기 공용)."""
-        import copy as _copy
+    def load_cached_display_data():
+        """디스크 캐시는 시작/명시적 변경 때만 읽고, 미리보기는 메모리 복사본을 쓴다."""
         cache = config.load_cache()
         meals = dict(cache.get("meal", {}).get("data") or {})
-        timetable = _copy.deepcopy(cache.get("timetable") or {})
+        timetable = copy.deepcopy(cache.get("timetable") or {})
         if not timetable:
             timetable = {"date": "", "weekday_label": "", "periods": []}
-        fetch_timetable._resolve_teachers(timetable, config.load_config().get("teacher_names") or [])
+        fetch_timetable._resolve_teachers(timetable, cfg.get("teacher_names") or [])
         return meals, timetable
 
+    def cached_display_data():
+        return (copy.deepcopy(display_state["meals"]),
+                copy.deepcopy(display_state["timetable"]))
+
     def fill_cached_data():
-        meals, timetable = cached_display_data()
+        meals, timetable = load_cached_display_data()
         fill_data(meals, timetable)
 
     def worker(apply=False):
@@ -398,8 +417,8 @@ def show_app(on_save=None) -> bool:
 
         def run():
             try:
-                meals = fetch_meal.fetch_meals(current)
-                timetable = fetch_timetable.fetch_today(current)
+                meals, timetable = data_fetch.fetch_all(
+                    current, fetch_meal.fetch_meals, fetch_timetable.fetch_today)
                 path = render.render_wallpaper(meals, timetable, current)
                 is_offline = bool(meals.get("_cached") or timetable.get("_cached"))
                 offline_suffix = " (오프라인: 캐시 데이터)" if is_offline else ""
@@ -445,8 +464,8 @@ def show_app(on_save=None) -> bool:
 
         def run():
             try:
-                meals = fetch_meal.fetch_meals(snapshot)
-                timetable = fetch_timetable.fetch_today(snapshot)
+                meals, timetable = data_fetch.fetch_all(
+                    snapshot, fetch_meal.fetch_meals, fetch_timetable.fetch_today)
                 offline = meals.get("_cached") or timetable.get("_cached")
                 ui_after(fill_data, meals, timetable)
                 ui_after(status_var.set,
@@ -493,7 +512,7 @@ def show_app(on_save=None) -> bool:
 
         def run():
             try:
-                img = render.render_wallpaper_image(meals, timetable, snapshot, size=size).convert("RGB")
+                img = render.render_preview_image(meals, timetable, snapshot, size=size)
             except Exception as e:
                 config.log(f"미리보기 렌더 실패: {e!r}")
                 ui_after(finish_preview, token, None, 0, 0)
@@ -675,8 +694,8 @@ def show_app(on_save=None) -> bool:
 
     style_all()
     fill_cached_data()
-    root.after(25, pump_ui_queue)
-    root.after(600, refresh_data)  # 시작하자마자 최신 급식·시간표를 백그라운드로
+    root.after(50, pump_ui_queue)
+    root.after(900, refresh_data)  # 초기 UI/미리보기가 뜬 뒤 네트워크 작업 시작
     root.eval("tk::PlaceWindow . center")
     root.mainloop()
     return saved["ok"]

@@ -21,32 +21,33 @@
   하나를 선택해 바탕화면과 설정창 스타일을 바꿀 수 있다.
 - **애플리케이션 UI**: 반/테마/배경/자동 실행 설정, 이미지 생성, 바탕화면 적용,
   급식/시간표 확인을 한 창에서 처리한다.
-- **자동 실행**: Windows는 레지스트리 Run 키, macOS는 사용자 LaunchAgent로
-  시작 시 자동 실행. 부팅 직후 인터넷이 안 붙어 있으면 최대 5분간 10초 간격으로 재시도.
+- **자동 실행**: Windows는 지연된 사용자 작업 스케줄러, macOS는 사용자 LaunchAgent로
+  시작 시 자동 실행. 네트워크가 준비되지 않으면 기존 배경을 유지하고 저빈도 재시도.
 - **트레이**: 갱신 후 트레이에 상주. 메뉴 — 지금 갱신 / 설정 / 종료.
   갱신은 부팅 시 1회가 기본 (주기적 갱신 없음).
+- **저사양 최적화**: 급식·시간표 병렬 조회, 캐시 기반 UI, 640×360 제한 미리보기,
+  매 실행 압축 해제가 없는 Windows 폴더형 빌드를 사용한다.
 
-## 빌드 (Windows)
+## 설치 (Windows)
 
-명령 프롬프트(cmd):
+Python 3.10 이상이 설치된 PC에서 아래 파일을 더블클릭하면 빌드부터 사용자 설치,
+바로가기 생성, 첫 실행까지 이어서 처리한다. 관리자 권한은 필요하지 않다.
 
 ```bat
-pip install -r requirements.txt
-build.bat
+setup_windows.bat
 ```
 
-PowerShell:
+이미 빌드된 `dist\하태욱 프로그램\` 폴더가 있으면 다시 빌드하지 않고 바로 설치한다.
+강제로 새 빌드를 만들려면:
 
 ```powershell
-pip install -r requirements.txt
-.\build.ps1
+powershell -ExecutionPolicy Bypass -File setup_windows.ps1 -Rebuild
 ```
 
-> 실행 정책 때문에 `.\build.ps1`이 막히면:
-> `powershell -ExecutionPolicy Bypass -File build.ps1`
+빌드와 설치를 따로 실행해야 할 때만 `build.bat`, `install_windows.bat`를 사용한다.
 
-→ `dist\하태욱 프로그램.exe` 생성. 처음 실행하면 설정창이 떠서 반을 고른다.
-실행 파일 아이콘은 `assets/icons/app_icon.ico`를 사용한다.
+→ `dist\하태욱 프로그램\하태욱 프로그램.exe` 생성. 폴더 전체가 앱이므로 EXE만
+따로 옮기지 않는다.
 
 ## 빌드 (macOS)
 
@@ -127,7 +128,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `settings_ui.py` | 기존 호출 호환용 UI 래퍼 |
 | `ui_common.py` | 공용 UI 테마 (팔레트·폰트·macOS 호환 ThemedButton) |
 | `wallpaper.py` | Windows/macOS 바탕화면 적용 |
-| `autostart.py` | Windows Run 키 / macOS LaunchAgent 자동 시작 등록 |
+| `autostart.py` | Windows 작업 스케줄러 / macOS LaunchAgent 자동 시작 등록 |
 | `config.py` | 설정·캐시·로그 (`%APPDATA%\하태욱프로그램\`) |
 | `assets/fonts/neodgm.ttf` | 네오둥근모 픽셀 폰트 (자유 라이선스) |
 | `assets/icons/app_icon.ico` | Windows 실행 파일 아이콘 |

@@ -1,4 +1,4 @@
-# 하태욱 프로그램 Windows 제거 스크립트
+﻿# 하태욱 프로그램 Windows 제거 스크립트
 # 설치된 파일, 설정/캐시, 시작 프로그램 등록을 모두 제거한다.
 #
 # 실행: powershell -ExecutionPolicy Bypass -File uninstall_windows.ps1
@@ -43,7 +43,8 @@ if (Test-Path $DesktopShortcut) {
     Write-Host "바탕화면 바로가기 제거" -ForegroundColor Gray
 }
 
-# 자동 실행 레지스트리
+# 자동 실행 (작업 스케줄러 + 레거시 레지스트리)
+schtasks /Delete /TN $RegValueName /F 2>$null | Out-Null
 $RegPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 try {
     Remove-ItemProperty -Path $RegPath -Name $RegValueName -Force -ErrorAction Stop

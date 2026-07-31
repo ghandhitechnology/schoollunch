@@ -39,7 +39,8 @@ if exist "%USERPROFILE%\Desktop\%APP_NAME%.lnk" (
     echo 바탕화면 바로가기 제거
 )
 
-rem 자동 실행 레지스트리
+rem 자동 실행 (작업 스케줄러 + 레거시 레지스트리)
+schtasks /Delete /TN "하태욱프로그램" /F >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "하태욱프로그램" /f >nul 2>&1
 
 echo.

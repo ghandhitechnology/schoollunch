@@ -6,53 +6,53 @@
 
 - Windows 10(1903 이상) 또는 Windows 11 권장
 - Python 3.10 이상 ([python.org](https://www.python.org/downloads/))
-- pip로 의존성 설치: `pip install -r requirements.txt`
 
-## 1. 실행 파일 빌드
+## 1. 가장 쉬운 설치
 
-### 방법 A: 명령 프롬프트(cmd)
+`setup_windows.bat`를 더블클릭합니다.
 
 ```bat
-pip install -r requirements.txt
+setup_windows.bat
+```
+
+스크립트가 다음을 자동으로 처리합니다.
+
+- 기존 빌드가 있으면 그대로 사용
+- 빌드가 없으면 `.venv-build` 가상환경 생성 및 의존성 설치
+- 저사양 PC용 폴더형 앱 빌드
+- `%LOCALAPPDATA%\하태욱프로그램`에 사용자 권한으로 설치
+- 시작 메뉴와 선택적 바탕화면 바로가기 생성
+- 설정 UI 실행
+
+관리자 권한이나 전역 `pip install`은 필요하지 않습니다.
+
+## 2. 빌드와 설치를 따로 실행
+
+강제로 새로 빌드:
+
+```bat
 build.bat
 ```
 
-### 방법 B: PowerShell
-
-```powershell
-pip install -r requirements.txt
-.\build.ps1
-```
-
-> PowerShell 실행 정책으로 막히면 다음처럼 실행하세요:
-> ```powershell
-> powershell -ExecutionPolicy Bypass -File build.ps1
-> ```
-
-빌드가 완료되면 `dist\하태욱 프로그램.exe`가 생성됩니다.
-
-## 2. 설치
-
-빌드 후 `dist` 폐기지의 실행 파일을 원하는 위치에 설치할 수 있습니다.
-
-### PowerShell 설치 (권장)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install_windows.ps1
-```
-
-### 명령 프롬프트 설치
+빌드 결과 설치:
 
 ```bat
 install_windows.bat
 ```
 
-설치 스크립트는 다음 작업을 수행합니다:
+빌드 결과는 아래 폴더입니다.
 
-- `%LOCALAPPDATA%\하태욱프로그램`에 실행 파일 복사
-- 시작 메뉴에 바로가기 생성
-- 선택적으로 바탕화면 바로가기 생성
-- 처음 실행 시 설정창 열기
+```text
+dist\하태욱 프로그램\하태욱 프로그램.exe
+```
+
+`하태욱 프로그램` 폴더 전체가 앱입니다. EXE 하나만 복사하면 실행되지 않습니다.
+
+자동 설치나 배포 스크립트에서는 다음 옵션을 사용할 수 있습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_windows.ps1 -Unattended -NoDesktopShortcut -NoLaunch
+```
 
 ## 3. 처음 사용
 
@@ -63,15 +63,28 @@ install_windows.bat
 
 ## 4. 시작 프로그램 등록
 
-설정창의 **시작 시 자동 실행** 체크박스를 켜면, Windows 레지스트리 `Run` 키에 등록됩니다. 부팅 직후 인터넷이 연결될 때까지 최대 5분간 기다렸다가 급식·시간표를 가져와 바탕화면을 갱신합니다.
+설정창의 **시작 시 자동 실행** 체크박스를 켜면, Windows **작업 스케줄러**에 `하태욱프로그램` 작업이 등록됩니다.
+
+| 설정 | 동작 |
+|------|------|
+| 트리거 | 사용자 로그온 |
+| 지연 | 30초 (Wi-Fi·DNS 안정화 대기) |
+| 조건 | 네트워크 연결이 있을 때만 실행 |
+| 동작 | `하태욱 프로그램.exe --background` |
+
+앱은 별도 연결 확인을 반복하지 않고 바로 데이터를 요청합니다. 네트워크가 아직
+준비되지 않았으면 빈 배경화면을 만들거나 적용하지 않고, 트레이에서 2·5·10분 후
+저빈도로 자동 재시도합니다.
+
+기존 레지스트리 `Run` 키 등록은 작업 스케줄러로 전환할 때 자동으로 제거됩니다. 작업 확인: **작업 스케줄러** → **작업 스케줄러 라이브러리** → `하태욱프로그램`.
 
 ## 5. 문제 해결
 
 ### 빌드가 안 될 때
 
-- Python이 설치되어 있고 `python` 명령이 작동하는지 확인하세요.
-- `pip install -r requirements.txt`를 다시 실행해 의존성을 최신으로 맞추세요.
-- 폐기지 경로에 한글이 포함되어 있어도 `.spec` 빌드를 사용하면 정상적으로 빌드됩니다.
+- Python 3.10 이상 설치 시 **Add Python to PATH**를 선택하거나 `py` 명령이 동작하는지 확인하세요.
+- `.venv-build`를 지우고 `build.bat`를 다시 실행하면 깨진 빌드 환경을 새로 만듭니다.
+- 경로에 한글이 포함되어 있어도 `windows_build.spec`을 사용하므로 정상 빌드됩니다.
 
 ### 실행 파일이 켜지지 않을 때
 
@@ -89,7 +102,14 @@ install_windows.bat
 
 - 인터넷 연결 상태를 확인하세요.
 - 학교 홈페이지나 NEIS 서버가 점검 중이면 캐시 데이터를 보여줍니다.
-- `log.txt`에 `"인터넷 연결 대기 중"` 메시지가 반복되면 방화벽/프록시 설정을 확인하세요.
+- `log.txt`에 조회 실패가 반복되면 방화벽/프록시 설정을 확인하세요.
+- Wi-Fi 연결이 느린 PC에서는 작업 스케줄러의 30초 지연과 트레이 자동 재시도(2·5·10분)가 갱신을 이어갑니다.
+
+### 저사양 PC에서 더 가볍게 사용하기
+
+- 설치 폴더 안의 EXE를 사용하세요. 폴더형 빌드는 실행할 때마다 압축을 풀지 않습니다.
+- 설정창 미리보기는 자동으로 최대 640×360에서 렌더되어 CPU 사용량을 제한합니다.
+- 급식과 시간표는 캐시를 먼저 표시하고, 네트워크 갱신은 백그라운드에서 실행됩니다.
 
 ### UI 글씨가 흐릿하게 보일 때
 
@@ -103,7 +123,8 @@ install_windows.bat
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\하태욱프로그램"
 Remove-Item -Recurse -Force "$env:APPDATA\하태욱프로그램"
 Remove-Item -Recurse -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\하태욱 프로그램"
-# 자동 실행 레지스트리 제거
+# 자동 실행 제거 (작업 스케줄러 + 레거시 레지스트리)
+schtasks /Delete /TN "하태욱프로그램" /F
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "하태욱프로그램" /f
 ```
 

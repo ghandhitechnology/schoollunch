@@ -3,7 +3,7 @@
 
 흐름: 중복 실행 방지 → (최초 실행 시 설정창) → 인터넷 대기 → fetch → 렌더 →
 바탕화면 적용 → 트레이 상주 (지금 갱신 / 설정 / 종료).
-갱신은 부팅 시 1회가 기본이며 주기적 갱신은 하지 않는다.
+갱신은 부팅 시 1회가 기본이며, 네트워크 미준비 시 트레이에서 자동 재시도한다.
 """
 import os
 import argparse
@@ -19,10 +19,9 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
-import requests
-
 import autostart
 import config
+import data_fetch
 import fetch_meal
 import fetch_timetable
 import render
@@ -30,8 +29,9 @@ import settings_ui
 import wallpaper
 
 MUTEX_NAME = "hataewook-program-mutex"
-INTERNET_RETRY_SEC = 10
-INTERNET_MAX_WAIT_SEC = 300
+BOOT_UPDATE_ATTEMPTS = 1
+BOOT_UPDATE_GAP_SEC = 15
+BACKGROUND_RETRY_INTERVALS = (120, 300, 600)
 
 # 예외 발생 시 콘솔 대신 로그 파일에 기록 (PyInstaller --noconsole 호환)
 def _excepthook(exc_type, exc_value, exc_tb):
@@ -42,6 +42,7 @@ def _excepthook(exc_type, exc_value, exc_tb):
 sys.excepthook = _excepthook
 
 _mutex_handle = None
+_retry_stop = threading.Event()
 
 
 def already_running() -> bool:
@@ -53,42 +54,95 @@ def already_running() -> bool:
     return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
 
 
-def wait_for_internet() -> bool:
-    deadline = time.monotonic() + INTERNET_MAX_WAIT_SEC
-    while time.monotonic() < deadline:
-        try:
-            requests.head("https://open.neis.go.kr", timeout=5)
+def _meals_have_content(meals: dict) -> bool:
+    for key in ("조식", "중식", "석식"):
+        items = meals.get(key)
+        if items:
             return True
-        except requests.RequestException:
-            config.log("인터넷 연결 대기 중...")
-            time.sleep(INTERNET_RETRY_SEC)
     return False
+
+
+def _timetable_has_content(timetable: dict) -> bool:
+    return bool(timetable.get("periods"))
+
+
+def data_is_usable(meals: dict, timetable: dict) -> bool:
+    """실시간 데이터이거나, 캐시에 표시할 내용이 있을 때 True."""
+    if not meals.get("_cached") or not timetable.get("_cached"):
+        return True
+    return _meals_have_content(meals) or _timetable_has_content(timetable)
 
 
 _update_lock = threading.Lock()
 
 
-def update(apply_wallpaper: bool = True) -> str | None:
+def update(apply_wallpaper: bool = True, force: bool = False) -> str | None:
     if not _update_lock.acquire(blocking=False):
         return None  # 이미 갱신 중
     try:
         cfg = config.load_config()
         config.log(f"갱신 시작 (반: {cfg.get('grade')}-{cfg.get('class_num')})")
-        meals = fetch_meal.fetch_meals(cfg)
-        timetable = fetch_timetable.fetch_today(cfg)
+        meals, timetable = data_fetch.fetch_all(
+            cfg, fetch_meal.fetch_meals, fetch_timetable.fetch_today)
+        usable = data_is_usable(meals, timetable)
+        if not usable and not force:
+            config.log("데이터 미준비 — 렌더·바탕화면 적용 건너뜀")
+            return None
         path = render.render_wallpaper(meals, timetable, cfg)
-        if apply_wallpaper:
+        should_apply = apply_wallpaper and (force or usable)
+        if apply_wallpaper and not should_apply:
+            config.log("네트워크 미준비 — 바탕화면 적용 건너뜀 (기존 배경 유지)")
+        elif should_apply:
             if not wallpaper.set_wallpaper(path):
                 config.log(f"바탕화면 적용 없이 이미지 생성까지만 완료: {path}")
         else:
             config.log(f"이미지 생성까지만 완료: {path}")
-        config.log("갱신 완료")
-        return path
+        if usable:
+            config.log("갱신 완료")
+            return path
+        if force:
+            config.log("갱신 완료 (강제 적용)")
+            return path
+        config.log("갱신 완료 (데이터 미준비 — 재시도 필요)")
+        return None
     except Exception as e:
         config.log(f"갱신 실패: {e!r}")
         return None
     finally:
         _update_lock.release()
+
+
+def update_with_retry(apply_wallpaper: bool = True, max_attempts: int = BOOT_UPDATE_ATTEMPTS) -> str | None:
+    """부팅 경로: 네트워크·데이터가 준비될 때까지 짧게 재시도한다."""
+    path = None
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            config.log(f"갱신 재시도 {attempt}/{max_attempts}")
+            time.sleep(BOOT_UPDATE_GAP_SEC)
+        path = update(apply_wallpaper=apply_wallpaper, force=False)
+        if path is not None:
+            return path
+    return path
+
+
+def _background_retry_worker(apply_wallpaper: bool) -> None:
+    for delay in BACKGROUND_RETRY_INTERVALS:
+        if _retry_stop.wait(delay):
+            return
+        config.log(f"백그라운드 자동 재시도 ({delay}초 경과)")
+        if update(apply_wallpaper=apply_wallpaper, force=False) is not None:
+            config.log("백그라운드 재시도 성공 — 자동 재시도 중단")
+            return
+    config.log("백그라운드 자동 재시도 종료 (최대 횟수 도달)")
+
+
+def start_background_retry(apply_wallpaper: bool = True) -> None:
+    _retry_stop.clear()
+    threading.Thread(
+        target=_background_retry_worker,
+        args=(apply_wallpaper,),
+        daemon=True,
+    ).start()
 
 
 def make_tray_icon():
@@ -98,6 +152,7 @@ def make_tray_icon():
         "white_on_black": ((0, 0, 0), (255, 255, 255)),
         "crayon_sketch": ((253, 251, 247), (44, 44, 44)),
         "cyber_terminal": ((10, 16, 13), (0, 255, 102)),
+        "bulletin_bold": ((255, 253, 248), (17, 17, 17)),
     }
     cfg = config.load_config()
     bg, fg = tray_themes.get(cfg.get("ui_theme"), tray_themes[config.DEFAULT_UI_THEME])
@@ -123,7 +178,7 @@ def run_tray() -> None:
     import pystray
 
     def on_update(icon, item):
-        threading.Thread(target=update, daemon=True).start()
+        threading.Thread(target=lambda: update(force=True), daemon=True).start()
 
     def on_settings(icon, item):
         # Tk는 메인 스레드에서만 안전하므로 설정 창은 별도 프로세스로 연다.
@@ -135,10 +190,11 @@ def run_tray() -> None:
                 config.log(f"설정 창 실행 실패: {e!r}")
                 return
             icon.icon = make_tray_icon()
-            update()
+            update(force=True)
         threading.Thread(target=open_and_apply, daemon=True).start()
 
     def on_quit(icon, item):
+        _retry_stop.set()
         icon.stop()
 
     icon = pystray.Icon(
@@ -194,13 +250,21 @@ def main() -> None:
     if not args.render_only:
         autostart.apply(cfg.get("autostart", True))
 
-    if not wait_for_internet():
-        config.log("인터넷 연결 실패 — 캐시로 갱신 시도")
-    path = update(apply_wallpaper=not (args.render_only or args.no_wallpaper))
+    apply_wallpaper = not (args.render_only or args.no_wallpaper)
+    boot_mode = args.background or args.once
+
+    if boot_mode:
+        path = update_with_retry(apply_wallpaper=apply_wallpaper)
+    else:
+        path = update(apply_wallpaper=apply_wallpaper, force=True)
+
     if args.render_only or args.once:
         if path:
             print(path)
         return
+
+    if path is None:
+        start_background_retry(apply_wallpaper=apply_wallpaper)
     run_tray()
 
 

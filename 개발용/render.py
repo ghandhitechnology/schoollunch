@@ -56,9 +56,33 @@ THEMES = {
         "scanline_alpha": 24,
         "phosphor_glow": True,
     },
+    "bulletin_bold": {
+        "bg": (245, 240, 232),
+        "panel_fill": (255, 253, 248),
+        "text": (17, 17, 17),
+        "dim": (85, 85, 85),
+        "bright": (17, 17, 17),
+        "accent": (255, 230, 0),
+        "border": (17, 17, 17),
+        "use_background_image": False,
+        "scanline_alpha": 0,
+        "bulletin": True,
+    },
+}
+
+BULLETIN_LAYOUT = {
+    "prompt": [0.24, 0.03, 0.72, 0.045],
+    "timetable": [0.24, 0.08, 0.32, 0.46],
+    "meal": [0.58, 0.08, 0.40, 0.52],
+}
+
+BULLETIN_FONT_FILES = {
+    "hangul": os.path.join("assets", "fonts", "BlackHanSans-Regular.ttf"),
+    "impact": os.path.join("assets", "fonts", "Anton-Regular.ttf"),
 }
 
 LEFT_RESERVED = 0.23   # 화면 왼쪽 빈 공간 비율 (아이콘 자리)
+PREVIEW_MAX_SIZE = (640, 360)
 
 
 # east_asian_width가 'A'(모호)지만 네오둥근모에서 전각으로 그려지는 문자들
@@ -292,8 +316,312 @@ def _apply_crt_vignette(img: Image.Image) -> None:
     img.alpha_composite(overlay)
 
 
+def _bulletin_system_font_paths(role: str) -> list[str]:
+    paths = []
+    if role == "impact":
+        if sys.platform == "win32":
+            windir = os.environ.get("WINDIR", r"C:\Windows")
+            fonts = os.path.join(windir, "Fonts")
+            paths.extend([
+                os.path.join(fonts, "impact.ttf"),
+                os.path.join(fonts, "arialbd.ttf"),
+            ])
+        elif sys.platform == "darwin":
+            paths.extend([
+                "/System/Library/Fonts/Supplemental/Impact.ttf",
+                "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            ])
+    elif role == "hangul":
+        if sys.platform == "win32":
+            windir = os.environ.get("WINDIR", r"C:\Windows")
+            fonts = os.path.join(windir, "Fonts")
+            paths.extend([
+                os.path.join(fonts, "malgunbd.ttf"),
+                os.path.join(fonts, "malgun.ttf"),
+            ])
+        elif sys.platform == "darwin":
+            paths.extend([
+                "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            ])
+        else:
+            paths.extend([
+                "/usr/share/fonts/truetype/nanum/NanumSquareEB.ttf",
+                "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+            ])
+    paths.append(FONT_PATH)
+    return paths
+
+
+def _load_bulletin_font(role: str, size: int):
+    """hangul=Black Han Sans, impact=Anton/Impact(Latin·숫자)."""
+    size = max(10, int(size))
+    candidates = [config.resource_path(BULLETIN_FONT_FILES[role])] if role in BULLETIN_FONT_FILES else []
+    candidates.extend(_bulletin_system_font_paths(role))
+    for path in candidates:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.truetype(FONT_PATH, size)
+    except OSError:
+        return ImageFont.load_default()
+
+
+def _bulletin_hrule(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int, palette: dict, width: int = 3):
+    draw.line([(x0, y), (x1, y)], fill=palette.get("border", palette["dim"]), width=width)
+
+
+def _wrap_text_lines(text: str, font, max_width: int) -> list[str]:
+    if max_width <= 0 or not text:
+        return [""]
+    words = text.replace(" · ", " · ").split(" ")
+    lines, current = [], ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if font.getlength(candidate) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        if font.getlength(word) <= max_width:
+            current = word
+        else:
+            chunk = ""
+            for ch in word:
+                if font.getlength(chunk + ch) > max_width:
+                    if chunk:
+                        lines.append(chunk)
+                    chunk = ch
+                else:
+                    chunk += ch
+            current = chunk
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def _bulletin_meal_sections(meals: dict, per_section_limit: int | None = None) -> list[tuple[str, list[str]]]:
+    sections = []
+    for key in ("조식", "중식", "석식"):
+        items = list(meals.get(key, []) or [])
+        if per_section_limit is not None and len(items) > per_section_limit:
+            hidden = len(items) - per_section_limit
+            items = items[:per_section_limit] + [f"외 {hidden}품"]
+        sections.append((key, items))
+    return sections
+
+
+def _bulletin_period_row_h(lh: int) -> int:
+    return lh + 8
+
+
+def _bulletin_measure_meal_height(sections, hangul_font, impact_font, content_w: int, badge_size: int, lh: int) -> int:
+    total = 0
+    gap = 10
+    text_x_pad = badge_size + 14
+    text_w = max(40, content_w - text_x_pad)
+    for _label, items in sections:
+        if not items:
+            block_h = max(badge_size, lh)
+        else:
+            joined = " · ".join(items)
+            lines = _wrap_text_lines(joined, hangul_font, text_w)
+            block_h = max(badge_size, len(lines) * lh + 4)
+        total += block_h + gap
+    return max(lh, total - gap)
+
+
+def _bulletin_measure_tt_height(periods, title_h: int, lh: int, pad: int) -> int:
+    rows = 1 + max(len(periods), 1)  # date + periods
+    return title_h + pad + rows * _bulletin_period_row_h(lh) + pad
+
+
+def _bulletin_fit_fonts(H: int, cfg: dict, periods: list, meal_sections: list):
+    scale = _font_scale(cfg)
+    tt_panel_h = round(H * BULLETIN_LAYOUT["timetable"][3])
+    meal_panel_h = round(H * BULLETIN_LAYOUT["meal"][3])
+    tt_panel_w = round(H * 16 / 9 * BULLETIN_LAYOUT["timetable"][2])  # approx; refined below
+    meal_panel_w = round(H * 16 / 9 * BULLETIN_LAYOUT["meal"][2])
+    pad = 16
+    start = max(14, round(H / 52 * scale))
+    min_size = max(11, round(H / 96))
+
+    for body_size in range(start, min_size - 1, -1):
+        hangul = _load_bulletin_font("hangul", body_size)
+        title = _load_bulletin_font("hangul", max(body_size + 4, round(body_size * 1.35)))
+        impact = _load_bulletin_font("impact", max(body_size + 2, round(body_size * 1.15)))
+        lh = _line_height(hangul)
+        title_h = _line_height(title) + 8
+        badge = lh + 10
+        tt_need = _bulletin_measure_tt_height(periods, title_h, lh, pad)
+        meal_need = title_h + pad + _bulletin_measure_meal_height(
+            meal_sections, hangul, impact, meal_panel_w - pad * 2, badge, lh)
+        if tt_need <= tt_panel_h and meal_need <= meal_panel_h:
+            return hangul, title, impact, lh, badge
+    hangul = _load_bulletin_font("hangul", min_size)
+    title = _load_bulletin_font("hangul", min_size + 3)
+    impact = _load_bulletin_font("impact", min_size + 1)
+    lh = _line_height(hangul)
+    return hangul, title, impact, lh, lh + 8
+
+
+def _bulletin_meal_sections_for_panel(meals: dict, H: int, cfg: dict, periods: list, panel_w: int):
+    for limit in (None, 8, 6, 5, 4, 3, 2, 1):
+        sections = _bulletin_meal_sections(meals, per_section_limit=limit)
+        hangul, title, impact, lh, badge = _bulletin_fit_fonts(H, cfg, periods, sections)
+        title_h = _line_height(title) + 8
+        meal_panel_h = round(H * BULLETIN_LAYOUT["meal"][3])
+        meal_need = title_h + 16 + _bulletin_measure_meal_height(
+            sections, hangul, impact, panel_w - 32, badge, lh)
+        if meal_need <= meal_panel_h:
+            return sections
+    return _bulletin_meal_sections(meals, per_section_limit=1)
+
+
+def _draw_bulletin_panel_header(draw, rect_px, title: str, palette: dict, title_font) -> int:
+    x0, y0, x1, _ = rect_px
+    fill = palette.get("panel_fill", palette["bg"])
+    border = palette.get("border", palette["dim"])
+    draw.rectangle(rect_px, fill=fill, outline=border, width=4)
+    pad = 14
+    y = y0 + pad
+    _draw_text(draw, (x0 + pad, y), title, title_font, palette["bright"], palette)
+    y += _line_height(title_font) + 6
+    _bulletin_hrule(draw, x0 + pad, x1 - pad, y, palette)
+    return y + 10
+
+
+def _draw_period_badge(draw, x: int, y: int, period_num: int, hangul_font, impact_font, lh: int, palette: dict) -> tuple[int, int]:
+    label = f"{period_num}교시"
+    pad_x, pad_y = 8, 4
+    w = int(max(hangul_font.getlength(label), impact_font.getlength(label))) + pad_x * 2
+    h = lh + pad_y * 2
+    draw.rectangle([x, y, x + w, y + h], fill=palette.get("border", (17, 17, 17)))
+    _draw_text(draw, (x + pad_x, y + pad_y - 1), label, hangul_font, (255, 255, 255), palette)
+    return w, h
+
+
+def _draw_meal_badge(draw, x: int, y: int, label: str, hangul_font, size: int, palette: dict) -> int:
+    sq = size
+    draw.rectangle([x, y, x + sq, y + sq], fill=palette["accent"], outline=palette.get("border", (17, 17, 17)), width=2)
+    tw = hangul_font.getlength(label)
+    th = _line_height(hangul_font)
+    tx = x + (sq - tw) / 2
+    ty = y + (sq - th) / 2 - 1
+    _draw_text(draw, (tx, ty), label, hangul_font, palette.get("border", palette["text"]), palette)
+    return sq
+
+
+def _draw_bulletin_timetable(draw, rect_px, timetable, cfg, palette, hangul_font, title_font, impact_font, lh, badge_h):
+    grade, cls = cfg.get("grade", 1), cfg.get("class_num", 1)
+    x0, _, x1, y1 = rect_px
+    pad = 14
+    y = _draw_bulletin_panel_header(draw, rect_px, f"시간표 {grade}-{cls}", palette, title_font)
+    max_w = x1 - x0 - pad * 2
+    date_label = f"{timetable.get('date', '')} ({timetable.get('weekday_label', '')})"
+    if timetable.get("_cached"):
+        date_label += "  [캐시]"
+    _draw_text(draw, (x0 + pad, y), _truncate_px(date_label, hangul_font, max_w),
+               hangul_font, palette["dim"], palette)
+    y += _bulletin_period_row_h(lh)
+    _bulletin_hrule(draw, x0 + pad, x1 - pad, y - 4, palette, width=2)
+    y += 6
+    periods = timetable.get("periods", [])
+    if not periods:
+        _draw_text(draw, (x0 + pad, y), "시간표 정보 없음", hangul_font, palette["dim"], palette)
+        return
+    badge_font = _load_bulletin_font("hangul", max(10, lh))
+    for p in periods:
+        row_h = _bulletin_period_row_h(lh)
+        if y + row_h > y1 - pad:
+            break
+        badge_w, badge_box_h = _draw_period_badge(
+            draw, x0 + pad, y, p["period"], badge_font, impact_font, lh, palette)
+        time_str = p.get("time") or ""
+        subj = p.get("subject") or "-"
+        teacher = p.get("teacher") or ""
+        detail = f"{time_str}  |  {subj}"
+        if teacher:
+            detail += f"  {teacher}"
+        detail_x = x0 + pad + badge_w + 12
+        _draw_text(draw, (detail_x, y + max(0, (badge_box_h - lh) // 2)),
+                   _truncate_px(detail, hangul_font, x1 - pad - detail_x),
+                   hangul_font, palette["text"], palette)
+        y += row_h
+
+
+def _draw_bulletin_meals(draw, rect_px, meals, palette, hangul_font, title_font, lh, badge_size, sections):
+    x0, _, x1, y1 = rect_px
+    pad = 14
+    title = "오늘의 급식"
+    if meals.get("_cached"):
+        title += " [캐시]"
+    y = _draw_bulletin_panel_header(draw, rect_px, title, palette, title_font)
+    badge_font = _load_bulletin_font("hangul", max(10, int(badge_size * 0.55)))
+    text_x = pad + badge_size + 14
+    text_w = max(40, (x1 - x0) - text_x - pad)
+    gap = 10
+    for label, items in sections:
+        if y + badge_size > y1 - pad:
+            break
+        _draw_meal_badge(draw, x0 + pad, y, label, badge_font, badge_size, palette)
+        if not items:
+            _draw_text(draw, (x0 + text_x, y + 2), "급식 정보 없음", hangul_font, palette["dim"], palette)
+            block_h = max(badge_size, lh)
+        else:
+            joined = " · ".join(items)
+            lines = _wrap_text_lines(joined, hangul_font, text_w)
+            for i, line in enumerate(lines):
+                if y + i * lh > y1 - pad:
+                    break
+                _draw_text(draw, (x0 + text_x, y + i * lh), line, hangul_font, palette["text"], palette)
+            block_h = max(badge_size, len(lines) * lh + 2)
+        y += block_h + gap
+
+
+def _render_bulletin_wallpaper(meals: dict, timetable: dict, cfg: dict, size) -> Image.Image:
+    W, H = size
+    palette = _theme(cfg.get("ui_theme", config.DEFAULT_UI_THEME))
+    img = _load_background(cfg.get("background_image", ""), (W, H), palette).convert("RGBA")
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    periods = timetable.get("periods", [])
+    meal_rect = _rect_px(BULLETIN_LAYOUT["meal"], (W, H))
+    meal_w = meal_rect[2] - meal_rect[0]
+    meal_sections = _bulletin_meal_sections_for_panel(meals, H, cfg, periods, meal_w)
+    hangul_font, title_font, impact_font, lh, badge_size = _bulletin_fit_fonts(
+        H, cfg, periods, meal_sections)
+    prompt_font = _load_bulletin_font("impact", max(12, round(lh * 0.95)))
+
+    grade, cls = cfg.get("grade", 1), cfg.get("class_num", 1)
+    prompt = _format_prompt(cfg.get("prompt_text"), grade, cls) + " █"
+    prompt_rect = _rect_px(BULLETIN_LAYOUT["prompt"], (W, H))
+    _draw_text(draw, (prompt_rect[0], prompt_rect[1]),
+               _truncate_px(prompt, prompt_font, prompt_rect[2] - prompt_rect[0]),
+               prompt_font, palette.get("border", palette["text"]), palette)
+
+    tt_rect = _rect_px(BULLETIN_LAYOUT["timetable"], (W, H))
+    _draw_bulletin_timetable(draw, tt_rect, timetable, cfg, palette,
+                             hangul_font, title_font, impact_font, lh, badge_size)
+    _draw_bulletin_meals(draw, meal_rect, meals, palette, hangul_font, title_font, lh, badge_size, meal_sections)
+
+    bottom = max(tt_rect[3], meal_rect[3]) + round(H * 0.02)
+    if bottom < H - lh and (meals.get("_cached") or timetable.get("_cached")):
+        _draw_text(draw, (tt_rect[0], bottom),
+                   "오프라인 — 마지막으로 받은 정보를 표시 중",
+                   hangul_font, palette["dim"], palette)
+    return img
+
+
 def _draw_panel(draw: ImageDraw.ImageDraw, rect_px, title: str, palette: dict, font, title_font):
     x0, y0, x1, y1 = rect_px
+    if palette.get("bulletin"):
+        return _draw_bulletin_panel_header(
+            draw, rect_px, title.replace("[ ", "").replace(" ]", ""), palette, title_font)
     if palette.get("handdrawn"):
         _draw_wobbly_line(draw, x0, y0, x1, y0, palette["dim"], width=3)
         _draw_wobbly_line(draw, x1, y0, x1, y1, palette["dim"], width=3)
@@ -414,11 +742,31 @@ def _render_custom_wallpaper(meals: dict, timetable: dict, cfg: dict, size, pale
     draw = ImageDraw.Draw(img, "RGBA")
     font_size = max(8, round(H / 54 * _font_scale(cfg)))
     title_size = max(10, round(font_size * 1.15))
+    custom = cfg.get("custom_wallpaper") or config.default_custom_wallpaper()
+    layout = custom.get("layout", config.default_custom_wallpaper()["layout"])
+
+    if palette.get("bulletin"):
+        periods = timetable.get("periods", [])
+        meal_rect = _rect_px(layout.get("meal", BULLETIN_LAYOUT["meal"]), size)
+        meal_w = meal_rect[2] - meal_rect[0]
+        meal_sections = _bulletin_meal_sections_for_panel(meals, H, cfg, periods, meal_w)
+        hangul_font, title_font, impact_font, lh, badge_size = _bulletin_fit_fonts(
+            H, cfg, periods, meal_sections)
+        prompt_font = _load_bulletin_font("impact", max(12, round(lh * 0.95)))
+        grade, cls = cfg.get("grade", 1), cfg.get("class_num", 1)
+        prompt = _format_prompt(cfg.get("prompt_text"), grade, cls) + " █"
+        prompt_rect = _rect_px(layout.get("prompt", BULLETIN_LAYOUT["prompt"]), size)
+        _draw_text(draw, (prompt_rect[0], prompt_rect[1]),
+                   _truncate_px(prompt, prompt_font, prompt_rect[2] - prompt_rect[0]),
+                   prompt_font, palette.get("border", palette["text"]), palette)
+        _draw_bulletin_timetable(draw, _rect_px(layout.get("timetable", BULLETIN_LAYOUT["timetable"]), size),
+                                 timetable, cfg, palette, hangul_font, title_font, impact_font, lh, badge_size)
+        _draw_bulletin_meals(draw, meal_rect, meals, palette, hangul_font, title_font, lh, badge_size, meal_sections)
+        return img
+
     font_path = HANDWRITTEN_FONT_PATH if palette.get("handdrawn") and os.path.exists(HANDWRITTEN_FONT_PATH) else FONT_PATH
     font = ImageFont.truetype(font_path, font_size)
     title_font = ImageFont.truetype(font_path, title_size)
-    custom = cfg.get("custom_wallpaper") or config.default_custom_wallpaper()
-    layout = custom.get("layout", config.default_custom_wallpaper()["layout"])
     _draw_prompt(draw, _rect_px(layout.get("prompt", config.DEFAULT_CUSTOM_WALLPAPER["layout"]["prompt"]), size),
                  cfg, palette, font)
     _draw_timetable_panel(draw, _rect_px(layout.get("timetable", config.DEFAULT_CUSTOM_WALLPAPER["layout"]["timetable"]), size),
@@ -587,6 +935,8 @@ def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -
         size = detect_resolution()
     W, H = size
     palette = _theme(cfg.get("ui_theme", config.DEFAULT_UI_THEME))
+    if palette.get("bulletin") and not _custom_enabled(cfg):
+        return _render_bulletin_wallpaper(meals, timetable, cfg, (W, H))
     if _custom_enabled(cfg):
         return _render_custom_wallpaper(meals, timetable, cfg, (W, H), palette)
 
@@ -636,6 +986,18 @@ def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -
     if palette.get("phosphor_glow"):
         _apply_crt_vignette(img)
 
+    return img
+
+
+def render_preview_image(meals: dict, timetable: dict, cfg: dict, size) -> Image.Image:
+    """낮은 해상도에서 렌더한 뒤 UI 크기로 확대해 라이브 미리보기 부하를 제한한다."""
+    width, height = max(1, int(size[0])), max(1, int(size[1]))
+    max_width, max_height = PREVIEW_MAX_SIZE
+    scale = min(1.0, max_width / width, max_height / height)
+    render_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    img = render_wallpaper_image(meals, timetable, cfg, size=render_size).convert("RGB")
+    if render_size != (width, height):
+        img = img.resize((width, height), Image.Resampling.BILINEAR)
     return img
 
 

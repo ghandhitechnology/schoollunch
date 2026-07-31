@@ -6,6 +6,8 @@ import os
 import sys
 import datetime
 import copy
+import tempfile
+import threading
 
 APP_NAME = "하태욱프로그램"
 
@@ -14,10 +16,12 @@ UI_THEMES = {
     "white_on_black": "백흑",
     "crayon_sketch": "감성",
     "cyber_terminal": "컴퓨터",
+    "bulletin_bold": "게시판",
 }
 DEFAULT_UI_THEME = "black_on_white"
 VALID_GRADES = (1,)
 VALID_CLASSES = (1, 2, 3, 4)
+_WRITE_LOCK = threading.RLock()
 
 
 def app_dir() -> str:
@@ -179,14 +183,24 @@ def load_config() -> dict:
 
 
 def _atomic_write_json(path: str, data) -> None:
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".tmp",
+                               dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def save_config(cfg: dict) -> None:
-    _atomic_write_json(CONFIG_PATH, cfg)
+    with _WRITE_LOCK:
+        _atomic_write_json(CONFIG_PATH, cfg)
 
 
 def load_cache() -> dict:
@@ -198,9 +212,11 @@ def load_cache() -> dict:
 
 
 def save_cache_entry(key: str, value) -> None:
-    cache = load_cache()
-    cache[key] = value
-    _atomic_write_json(CACHE_PATH, cache)
+    # 급식/시간표를 병렬로 가져와도 read-modify-write가 서로를 덮어쓰지 않게 한다.
+    with _WRITE_LOCK:
+        cache = load_cache()
+        cache[key] = value
+        _atomic_write_json(CACHE_PATH, cache)
 
 
 def log(msg: str) -> None:

@@ -97,7 +97,7 @@ class CustomWallpaperEditor:
         except (RuntimeError, tk.TclError):
             return
         try:
-            self.root.after(25, self.pump_ui_queue)
+            self.root.after(50, self.pump_ui_queue)
         except (RuntimeError, tk.TclError):
             return
 
@@ -146,7 +146,7 @@ class CustomWallpaperEditor:
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<Double-Button-1>", self.on_double_click)
         self.apply_style()
-        self.root.after(25, self.pump_ui_queue)
+        self.root.after(50, self.pump_ui_queue)
 
     def _button(self, parent, text, command):
         b = ThemedButton(parent, text, command, font=_font(12, "bold"))
@@ -437,7 +437,7 @@ class CustomWallpaperEditor:
 
         def run():
             try:
-                img = render.render_wallpaper_image(meals, timetable, cfg, size=size).convert("RGB")
+                img = render.render_preview_image(meals, timetable, cfg, size=size)
             except Exception as e:
                 config.log(f"커스텀 배경 미리보기 실패: {e!r}")
                 self.ui_after(self.finish_preview, token, seq, None, str(e))
