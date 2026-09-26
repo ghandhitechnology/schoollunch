@@ -73,6 +73,8 @@ If the execution policy blocks the script:
 `powershell -ExecutionPolicy Bypass -File build.ps1`
 
 Output: `dist\하태욱 프로그램.exe` (icon: `assets/icons/app_icon.ico`).
+`build.bat` and `build.ps1` generate the Windows version metadata from
+`version.py` before packaging.
 
 macOS:
 
@@ -83,6 +85,21 @@ python3 -m venv .venv
 ```
 
 Output: `dist-macos/하태욱 프로그램.app` (icon: `assets/icons/app_icon.icns`).
+
+## Publish a Windows auto-update
+
+The release workflow builds from `windows_lunch_dist` when a semantic-version
+tag is pushed. Set the same `APP_VERSION` in `개발용/version.py` and
+`windows_lunch_dist/version.py`, commit it, then push the matching tag:
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+The tag and `APP_VERSION` must match exactly. GitHub Actions publishes
+`hataewook-program-windows.exe` and its `.sha256` file. Packaged Windows apps
+check the latest stable release at startup and install newer versions silently.
 
 ## Development checks
 

@@ -19,6 +19,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem version.py를 Windows 파일 메타데이터에도 반영한다.
+python generate_version_info.py
+if errorlevel 1 exit /b 1
+
 rem PyInstaller가 한글 경로/파일명을 다룰 때 안정적인 .spec 빌드를 사용한다.
 pyinstaller --noconfirm --clean windows_build.spec
 if errorlevel 1 (

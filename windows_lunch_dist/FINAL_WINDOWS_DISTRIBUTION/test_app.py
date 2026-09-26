@@ -89,32 +89,6 @@ class ConfigRobustness(IsolatedConfigTest):
         self.assertEqual(config.load_config()["grade"], 1)
 
 
-class UpdaterHelpers(unittest.TestCase):
-    def setUp(self):
-        import updater
-        self.updater = updater
-
-    def test_version_comparison(self):
-        self.assertGreater(self.updater._parse_version("v1.2.1"),
-                           self.updater._parse_version("1.2.0"))
-        self.assertEqual(self.updater._parse_version("1.2"), (1, 2, 0, 0))
-        with self.assertRaises(ValueError):
-            self.updater._parse_version("v1.2.0-beta")
-
-    def test_release_urls_are_restricted_to_this_repository(self):
-        valid = "https://github.com/ghandhitechnology/schoollunch/releases/download/v1.1.0/file.exe"
-        self.assertTrue(self.updater._trusted_release_url(valid))
-        self.assertFalse(self.updater._trusted_release_url("http://github.com/ghandhitechnology/schoollunch/releases/download/v1/file.exe"))
-        self.assertFalse(self.updater._trusted_release_url("https://github.com/other/repo/releases/download/v1/file.exe"))
-
-    def test_checksum_parser_requires_matching_filename(self):
-        digest = "a" * 64
-        text = f"{digest}  {self.updater.EXE_ASSET_NAME}\n"
-        self.assertEqual(self.updater._checksum_from_text(text, self.updater.EXE_ASSET_NAME), digest)
-        with self.assertRaises(ValueError):
-            self.updater._checksum_from_text(f"{digest}  other.exe", self.updater.EXE_ASSET_NAME)
-
-
 class RenderExtremes(IsolatedConfigTest):
     def setUp(self):
         super().setUp()

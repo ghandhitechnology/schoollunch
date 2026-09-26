@@ -22,6 +22,10 @@ python -m pip install pyinstaller --disable-pip-version-check 2>&1 | Out-Null
 
 Write-Host "[하태욱 프로그램] 빌드를 시작합니다..." -ForegroundColor Green
 
+# version.py를 Windows 파일 메타데이터에도 반영한다.
+python generate_version_info.py
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # 한글 파일명/경로와 버전·manifest 리소스를 포함하기 위해 .spec 빌드를 사용한다.
 python -m PyInstaller --noconfirm --clean windows_build.spec
 if ($LASTEXITCODE -ne 0) {

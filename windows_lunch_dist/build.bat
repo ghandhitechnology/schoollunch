@@ -17,6 +17,10 @@ rem pyinstaller 가 PATH 에 없어도 python -m PyInstaller 로 동작하도록
 python -m pip install pyinstaller --disable-pip-version-check >nul 2>&1
 
 rem 한글 경로/파일명에 안정적인 .spec 빌드를 사용한다.
+rem version.py를 Windows 파일 메타데이터에도 반영한다.
+python generate_version_info.py
+if errorlevel 1 exit /b 1
+
 python -m PyInstaller --noconfirm --clean windows_build.spec
 if errorlevel 1 (
     echo.

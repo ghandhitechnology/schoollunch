@@ -32,6 +32,9 @@ macOS. Originally built by Taewook Ha (class of 33).
   seconds for up to 5 minutes.
 - **System tray** — after refreshing, the app stays in the tray (Refresh now /
   Settings / Quit). Refresh happens once at boot; there is no periodic refresh.
+- **Windows auto-update** — packaged Windows builds check the latest GitHub
+  Release at startup, verify its SHA-256 checksum, replace the executable, and
+  relaunch automatically. Checks are limited to once every six hours.
 
 ## Repository layout
 
@@ -84,6 +87,23 @@ wallpaper PNG and exit), `--once` (refresh once and exit),
 
 To build standalone executables (`dist\하태욱 프로그램.exe` on Windows,
 `dist-macos/하태욱 프로그램.app` on macOS), see [SETUP.md](SETUP.md).
+
+## Publishing a Windows update
+
+1. Change `APP_VERSION` in both `개발용/version.py` and
+   `windows_lunch_dist/version.py`.
+2. Commit and push the change.
+3. Create and push the matching tag, for example:
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+`.github/workflows/release-windows.yml` runs the tests on Linux, builds the
+Windows executable on a Windows runner, creates the checksum, and publishes
+both files to a GitHub Release. Existing packaged Windows apps install that
+release on their next update check.
 
 ## Status
 

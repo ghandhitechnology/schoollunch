@@ -25,6 +25,8 @@
   시작 시 자동 실행. 부팅 직후 인터넷이 안 붙어 있으면 최대 5분간 10초 간격으로 재시도.
 - **트레이**: 갱신 후 트레이에 상주. 메뉴 — 지금 갱신 / 설정 / 종료.
   갱신은 부팅 시 1회가 기본 (주기적 갱신 없음).
+- **자동 업데이트**: 실행 시 GitHub의 최신 정식 릴리스를 확인하고 SHA-256을
+  검증한 뒤 실행 파일을 교체하고 자동으로 다시 실행한다. 확인 주기는 최대 6시간에 1회다.
 
 ## 빌드 (Windows)
 
@@ -132,6 +134,19 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `assets/fonts/neodgm.ttf` | 네오둥근모 픽셀 폰트 (자유 라이선스) |
 | `assets/icons/app_icon.ico` | Windows 실행 파일 아이콘 |
 | `assets/icons/app_icon.icns` | macOS 앱 번들 아이콘 |
+
+## 새 버전 배포
+
+저장소 루트에서 `개발용/version.py`와 `windows_lunch_dist/version.py`의
+`APP_VERSION`을 같은 버전으로 바꾸고 커밋한 뒤, 일치하는 태그를 푸시한다.
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+GitHub Actions가 Windows exe와 SHA-256 파일을 빌드해 GitHub Release에 올린다.
+설치된 앱은 다음 실행 또는 자동 실행 시 새 버전을 설치한다.
 
 ## 참고
 

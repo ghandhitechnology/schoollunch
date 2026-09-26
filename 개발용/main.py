@@ -27,6 +27,7 @@ import fetch_meal
 import fetch_timetable
 import render
 import settings_ui
+import updater
 import wallpaper
 
 MUTEX_NAME = "hataewook-program-mutex"
@@ -174,15 +175,26 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    default_launch = not (args.background or args.render_only or args.once or args.no_wallpaper)
 
-    # 설정 창은 트레이 인스턴스가 떠 있어도 열 수 있어야 하므로
-    # 중복 실행(뮤텍스) 검사보다 먼저 처리한다.
-    if args.ui or not (args.background or args.render_only or args.once or args.no_wallpaper):
+    # 트레이에서 연 설정 창(--ui)은 실행 중인 본체의 업데이트를 방해하지 않는다.
+    if args.ui:
+        settings_ui.show_settings()
+        return
+
+    if default_launch:
+        running = already_running()
+        if not running and updater.check_and_install(launch_mode="default"):
+            return
         settings_ui.show_settings()
         return
 
     if already_running():
         config.log("이미 실행 중 — 종료")
+        return
+
+    # 자동 실행 때 최대 6시간에 한 번 새 GitHub Release를 확인한다.
+    if args.background and updater.check_and_install(launch_mode="background"):
         return
 
     cfg = config.load_config()
