@@ -8,6 +8,27 @@ macOS. Originally built by Taewook Ha (class of 33).
 ![black on white preview](개발용/preview_black_on_white.png)
 ![white on black preview](개발용/preview_white_on_black.png)
 
+
+## Modern desktop interface
+
+The settings window and layout editor now use a local HTML/CSS/JavaScript interface hosted by pywebview. Windows requires the Microsoft Edge WebView2 Runtime. Install the updated `requirements.txt` before running from source.
+
+- Five modern wallpaper styles, including monochrome light/dark themes; the existing terminal styles remain available.
+- Changed lessons are decoded and highlighted correctly, including timetable values such as `>17015`.
+- Drag/resize/hide panels, edit stickers and drawing, undo/redo, and reset either the layout or all wallpaper customizations.
+- 100 bundled study messages, with source links for 70 Korean paraphrases; turn messages on/off or choose another message for today.
+- Choose class 1-1 through 1-4 from the Today screen and apply it to the wallpaper. Normal startup still refreshes once at login; appearance previews and quote changes use local data.
+
+See [UI_UPDATE.md](UI_UPDATE.md) for behavior details and [STUDY_MESSAGES.md](개발용/STUDY_MESSAGES.md) for message provenance. The previous Tkinter implementation remains in the tree for reference; the active settings entry point is `modern_ui.py`.
+
+Validation (Windows, Python 3.12):
+
+```powershell
+cd 개발용
+python -m unittest test_timetable test_app test_modern_ui test_layout_editor test_modern_themes test_quote_controls
+```
+
+
 ## What it does
 
 - **Meal menu** — pulls breakfast/lunch/dinner from the NEIS open education

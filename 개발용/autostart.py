@@ -16,7 +16,12 @@ def _exe_path() -> str:
     # 스크립트 위치를 기준으로 절대 경로를 생성 (작업 디렉터리와 무관)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     main_py = os.path.join(script_dir, "main.py")
-    return f'"{sys.executable}" "{main_py}" --background'
+    executable = sys.executable
+    if sys.platform == "win32" and os.path.basename(executable).lower() == "python.exe":
+        windowed = os.path.join(os.path.dirname(executable), "pythonw.exe")
+        if os.path.exists(windowed):
+            executable = windowed
+    return f'"{executable}" "{main_py}" --background'
 
 
 def _program_arguments() -> list[str]:

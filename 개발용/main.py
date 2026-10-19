@@ -157,6 +157,7 @@ def run_tray() -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="하태욱 프로그램")
+    parser.add_argument("--editor", action="store_true", help="세부 배치 편집기")
     parser.add_argument("--render-only", action="store_true",
                         help="급식/시간표를 가져와 wallpaper.png만 만들고 바탕화면 적용과 트레이 실행은 하지 않습니다.")
     parser.add_argument("--once", action="store_true",
@@ -175,6 +176,10 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    if args.editor:
+        from modern_ui import show_editor
+        show_editor()
+        return
     default_launch = not (args.background or args.render_only or args.once or args.no_wallpaper)
 
     # 트레이에서 연 설정 창(--ui)은 실행 중인 본체의 업데이트를 방해하지 않는다.

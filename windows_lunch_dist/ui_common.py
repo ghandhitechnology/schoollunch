@@ -9,8 +9,15 @@ import sys
 import tkinter as tk
 
 import config
+from modern_themes import MODERN_THEMES
 
 PALETTES = {
+    "daily": {
+        "theme_name": "daily", "bg": "#f3f5f0", "panel": "#ffffff",
+        "panel_alt": "#f4f7f2", "fg": "#283b2e", "dim": "#819181",
+        "border": "#dce5d9", "accent": "#32694e", "button_fg": "#ffffff",
+        "canvas_bg": "#eaf0e7",
+    },
     "black_on_white": {
         "theme_name": "black_on_white",
         "bg": "#ffffff",
@@ -62,6 +69,13 @@ PALETTES = {
 }
 
 _FONT_REGISTERED = False
+for _key, _value in MODERN_THEMES.items():
+    PALETTES[_key] = {
+        "theme_name": _key, "bg": _value['bg'], "panel": _value['bg'],
+        "panel_alt": _value['change_bg'], "fg": _value['text'], "dim": _value['dim'],
+        "border": _value['border'], "accent": _value['change_mark'],
+        "button_fg": _value['bg'], "canvas_bg": _value['bg'],
+    }
 
 
 def _register_windows_font():
@@ -136,11 +150,11 @@ class ThemedButton(tk.Frame):
                 kw.update(cnf)
             else:
                 return super().configure(cnf)
-        
+
         label_keys = {"text", "font", "fg", "foreground", "padx", "pady"}
         label_kw = {k: v for k, v in kw.items() if k in label_keys}
         frame_kw = {k: v for k, v in kw.items() if k not in label_keys}
-        
+
         if label_kw:
             self.label.configure(**label_kw)
         if frame_kw:
@@ -179,7 +193,7 @@ class ThemedButton(tk.Frame):
             else:
                 fg = "#00ff66"
                 border = "#ff0000"
-            
+
             super().configure(bg=border)
             self.label.configure(bg=bg, fg=fg)
             return
@@ -192,7 +206,7 @@ class ThemedButton(tk.Frame):
             bg, fg = p["dim"], p["button_fg"]
         else:
             bg, fg = p["accent"], p["button_fg"]
-            
+
         super().configure(bg=p["border"])
         self.label.configure(bg=bg, fg=fg)
 

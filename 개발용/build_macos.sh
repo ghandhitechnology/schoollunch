@@ -25,6 +25,7 @@ REAL_EXEC="$APP_PATH/Contents/MacOS/하태욱 프로그램.real"
   --osx-bundle-identifier "com.hataewook.wallpaper" \
   --icon "assets/icons/app_icon.icns" \
   --add-data "assets:assets" \
+  --add-data "ui:ui" \
   main.py
 
 if command -v dot_clean >/dev/null 2>&1; then
