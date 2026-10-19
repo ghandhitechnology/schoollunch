@@ -13,11 +13,18 @@ import unicodedata
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 import config
+from daily_quote import quote_for_day
+from modern_themes import MODERN_THEMES, is_modern_theme, renderer_palette
 
 FONT_PATH = config.resource_path(os.path.join("assets", "fonts", "neodgm.ttf"))
 HANDWRITTEN_FONT_PATH = config.resource_path(os.path.join("assets", "fonts", "handdrawn.ttf"))
 
 THEMES = {
+    "daily": {
+        "bg": (243, 245, 240), "text": (40, 59, 46), "dim": (129, 145, 129),
+        "bright": (40, 59, 46), "accent": (50, 105, 78),
+        "use_background_image": False, "scanline_alpha": 0,
+    },
     "black_on_white": {
         "bg": (255, 255, 255),
         "text": (0, 0, 0),
@@ -59,6 +66,11 @@ THEMES = {
 }
 
 LEFT_RESERVED = 0.23   # 화면 왼쪽 빈 공간 비율 (아이콘 자리)
+THEMES.update({key: renderer_palette(key) for key in MODERN_THEMES})
+
+
+def _changed_color(palette):
+    return (166, 95, 12) if sum(palette["bg"][:3]) > 380 else (255, 202, 105)
 
 
 # east_asian_width가 'A'(모호)지만 네오둥근모에서 전각으로 그려지는 문자들
@@ -328,17 +340,21 @@ def _draw_timetable_panel(draw: ImageDraw.ImageDraw, rect_px, timetable: dict, c
     date_label = f"{timetable.get('date', '')} ({timetable.get('weekday_label', '')})"
     if timetable.get("_cached"):
         date_label += "  [캐시]"
-    lines = [date_label]
+    lines = [(date_label, False)]
     periods = timetable.get("periods", [])
     if periods:
         for p in periods:
-            lines.append(f"{p['period']}교시 {p.get('time', ''):<5}  {p.get('subject') or '-'}  {p.get('teacher', '')}")
+            label = " · 변경" if p.get("changed") else ""
+            lines.append((f"{p['period']}교시 {p.get('time', ''):<5}  {p.get('subject') or '-'}  {p.get('teacher', '')}{label}", p.get("changed", False)))
     else:
-        lines.append("시간표 정보 없음")
-    for line in lines:
+        lines.append(("시간표 정보 없음", False))
+    for line, changed in lines:
         if y + line_h > y1 - pad:
             break
-        _draw_text(draw, (x0 + pad, y), _truncate_px(line, font, max_w), font, palette["text"], palette)
+        if changed:
+            fill = (255, 239, 199, 220) if sum(palette["bg"][:3]) > 380 else (87, 61, 20, 220)
+            draw.rounded_rectangle((x0 + 6, y, x1 - 6, y + line_h), radius=4, fill=fill)
+        _draw_text(draw, (x0 + pad, y), _truncate_px(line, font, max_w), font, _changed_color(palette) if changed else palette["text"], palette)
         y += line_h
 
 
@@ -454,10 +470,12 @@ def _build_screen(canvas: TuiCanvas, meals: dict, timetable: dict, cfg: dict, co
     if periods:
         for i, p in enumerate(periods):
             subj = p["subject"] or "─"
+            if p.get("changed"):
+                subj += " ·변경"
             canvas.put(top + 3 + i, c0 + 2, f"{p['period']}교시", palette["accent"])
             canvas.put(top + 3 + i, c0 + 8, p["time"], palette["dim"])
-            canvas.put(top + 3 + i, c0 + 15, _truncate(subj, 14), palette["text"] if p["subject"] else palette["dim"])
-            canvas.put(top + 3 + i, c0 + 30, _truncate(p["teacher"], 6), palette["dim"])
+            canvas.put(top + 3 + i, c0 + 15, _truncate(subj, 14), _changed_color(palette) if p.get("changed") else (palette["text"] if p["subject"] else palette["dim"]))
+            canvas.put(top + 3 + i, c0 + 30, _truncate(p["teacher"], 6), _changed_color(palette) if p.get("changed") else palette["dim"])
     else:
         canvas.put(top + 3, c0 + 2, "시간표 정보 없음", palette["dim"])
 
@@ -502,27 +520,27 @@ def _draw_wobbly_line(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float
     import random
     if len(fill) == 3:
         fill = (fill[0], fill[1], fill[2], 255)
-    
+
     # We draw 3 sketchy paths overlapping slightly
     for offset_scale in [0.4, 0.7, 1.0]:
         alpha = int(100 + 100 * offset_scale)
         stroke_color = (fill[0], fill[1], fill[2], alpha)
-        
+
         length = ((x1 - x0)**2 + (y1 - y0)**2)**0.5
         if length < 2:
             continue
-        
+
         num_segments = max(1, int(length / 10))
         dx = (x1 - x0) / num_segments
         dy = (y1 - y0) / num_segments
-        
+
         points = [(x0, y0)]
         for i in range(1, num_segments):
             px = x0 + i * dx + random.uniform(-jitter, jitter) * offset_scale
             py = y0 + i * dy + random.uniform(-jitter, jitter) * offset_scale
             points.append((px, py))
         points.append((x1, y1))
-        
+
         for j in range(len(points) - 1):
             draw.line([points[j], points[j+1]], fill=stroke_color, width=width)
 
@@ -530,14 +548,14 @@ def _draw_wobbly_line(draw: ImageDraw.ImageDraw, x0: float, y0: float, x1: float
 def _paint_handdrawn_panels(img: Image.Image, canvas: TuiCanvas, x_off: int, y_off: int,
                             cell_w: int, cell_h: int) -> None:
     draw = ImageDraw.Draw(img, "RGBA")
-    
+
     # Draw wobbly box borders
     for r0, c0, h, w in canvas.panels:
         x0 = x_off + c0 * cell_w + cell_w // 2
         y0 = y_off + r0 * cell_h + cell_h // 2
         x1 = x_off + (c0 + w - 1) * cell_w + cell_w // 2
         y1 = y_off + (r0 + h - 1) * cell_h + cell_h // 2
-        
+
         # Top line
         _draw_wobbly_line(draw, x0, y0, x1, y0, canvas.palette["dim"], width=3)
         # Right line
@@ -582,11 +600,140 @@ def _paint_glass_panels(img: Image.Image, canvas: TuiCanvas, x_off: int, y_off: 
     img.alpha_composite(overlay)
 
 
+def _render_daily(meals, timetable, cfg, size):
+    """A flat editorial layout; the left quarter stays clear for desktop icons."""
+    import datetime
+    width, height = size
+    scale = min(width / 1920, height / 1080)
+    colors = MODERN_THEMES.get(cfg.get("ui_theme"), MODERN_THEMES['daily'])
+    image = Image.new("RGBA", size, (0, 0, 0, 0) if cfg.get("_transparent_daily") else colors['bg'])
+    draw = ImageDraw.Draw(image)
+    def px(n):
+        return max(1, round(n * scale))
+    def font(n, bold=False):
+        candidates = [os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts", "malgunbd.ttf" if bold else "malgun.ttf"),
+                      "/System/Library/Fonts/AppleSDGothicNeo.ttc", FONT_PATH]
+        return ImageFont.truetype(next(p for p in candidates if os.path.exists(p)), px(n))
+    small, body, subject_font = font(17), font(22), font(25, True)
+    section_font, date_font = font(22, True), font(76)
+    ink, dim, border = colors['text'], colors['dim'], colors['border']
+    amber, amber_bg = colors['change'], colors['change_bg']
+    left, right = round(width * .26), width - px(90)
+    top = px(132)
+    draw.text((left, top), "인천과학고등학교", font=small, fill=dim)
+    date = timetable.get("date", "")
+    try:
+        day = datetime.date.fromisoformat(date)
+        label = f"{day.month:02d}.{day.day:02d}"
+        weekday = f"{'월화수목금토일'[day.weekday()]}요일"
+    except ValueError:
+        label, weekday = "오늘", ""
+    draw.text((left - px(4), top + px(22)), label, font=date_font, fill=ink)
+    date_width = draw.textlength(label, font=date_font)
+    draw.text((left + date_width + px(25), top + px(73)), weekday, font=font(25), fill=dim)
+    draw.text((right, top + px(79)), f"{cfg.get('grade', 1)}학년 {cfg.get('class_num', 1)}반",
+              font=body, fill=ink, anchor="ra")
+    rule_y, section_y = top + px(154), top + px(196)
+    draw.line((left, rule_y, right, rule_y), fill=border, width=px(1))
+    tt_right = left + round((right - left) * .40)
+    meal_left = tt_right + px(76)
+    divider_x = tt_right + px(38)
+    bottom = min(height - px(110), top + px(745))
+    draw.line((divider_x, section_y + px(8), divider_x, bottom), fill=border, width=px(1))
+    draw.text((left, section_y), "시간표", font=section_font, fill=ink)
+    draw.text((meal_left, section_y), "급식", font=section_font, fill=ink)
+    draw.ellipse((tt_right - px(114), section_y + px(12), tt_right - px(108), section_y + px(18)), fill=amber)
+    draw.text((tt_right, section_y + px(3)), "변경 수업", font=small, fill=dim, anchor="ra")
+    periods = timetable.get("periods", [])
+    label_y = section_y + px(62)
+    for x, text in ((left + px(14), "교시"), (left + px(76), "시작"), (left + px(164), "과목")):
+        draw.text((x, label_y), text, font=font(15), fill=dim)
+    draw.text((tt_right - px(14), label_y), "선생님", font=font(15), fill=dim, anchor="ra")
+    draw.line((left, label_y + px(34), tt_right, label_y + px(34)), fill=border, width=px(1))
+    row_top = label_y + px(48)
+    row_height = min(px(60), (bottom - row_top) / max(len(periods), 1))
+    for i, p in enumerate(periods):
+        y = round(row_top + i * row_height)
+        changed = p.get("changed", False)
+        color = amber if changed else ink
+        if changed:
+            draw.rounded_rectangle((left, y, tt_right, round(y + row_height - px(6))), radius=px(5), fill=amber_bg)
+            draw.line((left, y + px(13), left, round(y + row_height - px(19))), fill=colors['change_mark'], width=px(2))
+        baseline = y + max(px(6), round((row_height - px(31)) / 2))
+        draw.text((left + px(16), baseline + px(2)), str(p["period"]), font=body, fill=dim)
+        draw.text((left + px(76), baseline + px(4)), p.get("time", ""), font=small, fill=dim)
+        name = p.get("subject") or "—"
+        draw.text((left + px(164), baseline), _truncate_px(name, subject_font, tt_right - left - px(265)), font=subject_font, fill=color)
+        draw.text((tt_right - px(14), baseline + px(4)), p.get("teacher", ""), font=small, fill=color if changed else dim, anchor="ra")
+    if not periods:
+        draw.text((left + px(14), row_top + px(20)), "시간표 정보 없음", font=body, fill=dim)
+    column_gap = px(36)
+    column_width = (right - meal_left - column_gap) / 2
+    breakfast = meals.get("조식") or []
+    breakfast_y = bottom - px(112 if breakfast else 66)
+    max_items = max(len(meals.get("중식") or []), len(meals.get("석식") or []), 1)
+    line_height = min(px(37), (breakfast_y - label_y - px(70)) / max_items)
+    meal_font = font(min(22, max(12, line_height / scale * .73)))
+    for index, (key, label) in enumerate((("중식", "점심"), ("석식", "저녁"))):
+        x = round(meal_left + index * (column_width + column_gap))
+        draw.text((x, label_y - px(3)), label, font=body, fill=ink)
+        y = label_y + px(51)
+        for item in meals.get(key) or ["급식 정보 없음"]:
+            text = _truncate_px(item, meal_font, column_width)
+            draw.text((x, round(y)), text, font=meal_font, fill=ink if meals.get(key) else dim)
+            y += line_height
+    draw.line((meal_left, breakfast_y - px(20), right, breakfast_y - px(20)), fill=border, width=px(1))
+    draw.text((meal_left, breakfast_y), "아침", font=small, fill=dim)
+    # Breakfast wraps into the space below both columns instead of stretching the whole layout.
+    x, y = meal_left + px(66), breakfast_y
+    available_width = right - x
+    words = breakfast or ["등록된 급식이 없어요"]
+    lines, line = [], ""
+    for word in words:
+        candidate = f"{line} · {word}" if line else word
+        if draw.textlength(candidate, font=small) > available_width and line:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    if line:
+        lines.append(line)
+    for text in lines[:4]:
+        draw.text((x, round(y)), _truncate_px(text, small, available_width), font=small, fill=dim)
+        y += px(25)
+    cached = meals.get("_cached") or timetable.get("_cached")
+    if cached:
+        draw.text((left, bottom + px(28)), f"{date} · 저장된 자료 표시 중", font=small, fill=dim)
+    if cfg.get("quote_enabled", True):
+        quote = quote_for_day(cfg=cfg)
+        quote_font = font(22)
+        quote_lines = quote['text'].splitlines()
+        for point_size in range(22, 13, -1):
+            quote_font = font(point_size)
+            if max(draw.textlength(line, font=quote_font) for line in quote_lines) <= right - left:
+                break
+        center = (left + right) // 2
+        start_y = height - px(148 if quote.get("author") else (140 if len(quote_lines) > 1 else 125))
+        for index, line in enumerate(quote_lines):
+            draw.text((center, start_y + index * px(32)), line, font=quote_font, fill=colors['quote'], anchor="ma")
+        if quote.get("author"):
+            draw.text((center, height - px(85)), f"{quote['author']} · 의역", font=font(12), fill=colors['quote'], anchor="ma")
+    return image
+
+
 def render_wallpaper_image(meals: dict, timetable: dict, cfg: dict, size=None) -> Image.Image:
     if size is None:
         size = detect_resolution()
     W, H = size
     palette = _theme(cfg.get("ui_theme", config.DEFAULT_UI_THEME))
+    if cfg.get("custom_wallpaper", {}).get("editor_version") == 2:
+        from layout_editor import compose
+        return compose(meals, timetable, cfg, (W, H))
+    if is_modern_theme(cfg.get("ui_theme")):
+        if _custom_enabled(cfg):
+            from layout_editor import compose
+            return compose(meals, timetable, cfg, (W, H))
+        return _render_daily(meals, timetable, cfg, (W, H))
     if _custom_enabled(cfg):
         return _render_custom_wallpaper(meals, timetable, cfg, (W, H), palette)
 

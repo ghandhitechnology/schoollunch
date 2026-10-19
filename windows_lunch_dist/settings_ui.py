@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Compatibility wrapper for the full application UI."""
-from app_ui import show_app
+from modern_ui import show_app
 
 
 def show_settings(on_save=None) -> bool:

@@ -6,10 +6,12 @@ import os
 import sys
 import datetime
 import copy
+from modern_themes import MODERN_THEMES
 
 APP_NAME = "하태욱프로그램"
 
 UI_THEMES = {
+    **{key: value["name"] for key, value in MODERN_THEMES.items()},
     "black_on_white": "흑백",
     "white_on_black": "백흑",
     "crayon_sketch": "감성",
@@ -49,6 +51,9 @@ DEFAULT_CUSTOM_WALLPAPER = {
     "drawing_overlay": CUSTOM_DRAWING_PATH,
     "pen_color": "#245cff",
     "font_scale": 1.0,
+    "editor_version": 1,
+    "daily_layout": {},
+    "hidden_panels": [],
     "layout": {
         "prompt": [0.24, 0.035, 0.50, 0.045],
         "timetable": [0.24, 0.095, 0.28, 0.24],
@@ -64,6 +69,9 @@ DEFAULTS = {
     "class_num": 1,           # 1~4
     "background_image": "",   # 비우면 레트로 단색 배경
     "ui_theme": DEFAULT_UI_THEME,
+    "quote_enabled": True,
+    "quote_date": "",
+    "quote_index": -1,
     "autostart": True,
     "configured": False,      # 최초 설정창을 거쳤는지
     "neis": {},               # {"atpt": "E10", "code": "7310058"} 캐시
@@ -86,6 +94,13 @@ def _merge_custom_wallpaper(value) -> dict:
         if isinstance(value.get(key), str):
             custom[key] = value[key]
     custom["font_scale"] = _safe_font_scale(value.get("font_scale"))
+    custom["editor_version"] = 2 if value.get("editor_version") == 2 else 1
+    if isinstance(value.get("daily_layout"), dict):
+        custom["daily_layout"] = {key: rect for key in ("prompt", "timetable", "meal", "quote")
+                                  if (rect := _safe_rect(value["daily_layout"].get(key))) is not None}
+    if isinstance(value.get("hidden_panels"), list):
+        custom["hidden_panels"] = [key for key in value["hidden_panels"]
+                                   if key in ("prompt", "timetable", "meal", "quote")]
     if isinstance(value.get("layout"), dict):
         for name, default_rect in custom["layout"].items():
             rect = _safe_rect(value["layout"].get(name))

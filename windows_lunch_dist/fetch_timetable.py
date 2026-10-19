@@ -30,6 +30,7 @@ _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _RE_ROUTE = re.compile(r"\./(\d+)\?(\d+)l")
 _RE_PREFIX = re.compile(r"sc_data\('(\d+)_'")
 _RE_DAY = re.compile(r"일일자료=Q자료\(자료\.자료(\d+)")
+_RE_ORIGINAL = re.compile(r"원자료=Q자료\(자료\.자료(\d+)")
 _RE_TEACHER = re.compile(r"성명=Q성명\(자료\.자료(\d+)\[th\]")
 _RE_SUBJECT = re.compile(r"자료\.자료(\d+)\[sb\]")
 
@@ -47,6 +48,7 @@ def _bootstrap() -> dict:
         "search_q": search_q,
         "prefix": _RE_PREFIX.search(script).group(1),
         "day_key": _RE_DAY.search(script).group(1),
+        "original_key": _RE_ORIGINAL.search(script).group(1) if _RE_ORIGINAL.search(script) else None,
         "teacher_key": _RE_TEACHER.search(script).group(1),
         "subject_key": _RE_SUBJECT.search(script).group(1),
     }
@@ -103,8 +105,16 @@ def _decode_week(raw: dict, boot: dict, grade: int, cls: int) -> dict:
         count = row[0] if row and isinstance(row[0], int) else 0
         periods = []
         for i, x in enumerate(row[1 : count + 1], start=1):
+            changed = isinstance(x, str) and x.startswith(">")
+            if raw.get("변경알림") != 1 and boot.get("original_key"):
+                original = raw[f"자료{boot['original_key']}"][grade][cls][day]
+                changed = str(x) != str(original[i] if i < len(original) else 0)
+            # 컴시간의 변경 수업은 정수 대신 '>17015' 같은 문자열로 온다.
+            # 웹의 baSplit/splitData처럼 변경 표시를 제거하고 숫자로 해석한다.
+            if isinstance(x, str) and re.fullmatch(r">?\d+", x):
+                x = int(x.lstrip(">"))
             if not isinstance(x, int) or x == 0:
-                periods.append({"period": i, "time": times[i - 1] if i <= len(times) else "", "subject": "", "teacher": ""})
+                periods.append({"period": i, "time": times[i - 1] if i <= len(times) else "", "subject": "", "teacher": "", "changed": changed})
                 continue
             s, th = divmod(x, 1000)
             periods.append({
@@ -112,6 +122,7 @@ def _decode_week(raw: dict, boot: dict, grade: int, cls: int) -> dict:
                 "time": times[i - 1] if i <= len(times) else "",
                 "subject": str(subjects[s]) if s < len(subjects) else "?",
                 "teacher": str(teachers[th]) if th < len(teachers) else "",
+                "changed": changed,
             })
         # 끝쪽 빈 교시 제거
         while periods and not periods[-1]["subject"]:

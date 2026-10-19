@@ -12,7 +12,7 @@ a = Analysis(
     ['main.py'],
     pathex=[os.path.abspath(SPECPATH)],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[('assets', 'assets'), ('ui', 'ui')],
     hiddenimports=[
         'PIL._tkinter_finder',
         'pystray._win32',
