@@ -16,6 +16,7 @@ pyinstaller --onefile --noconsole `
   --name "하태욱 프로그램" `
   --icon "assets\icons\app_icon.ico" `
   --add-data "assets;assets" `
+  --collect-all customtkinter `
   main.py
 
 if ($LASTEXITCODE -ne 0) {

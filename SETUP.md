@@ -9,10 +9,15 @@ All commands below run from the `개발용` directory, where the source lives.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.10 or newer, **with Tk bindings**. The UI is Tkinter-based, and
+  Homebrew's Python ships without them — `import tkinter` fails with
+  `ModuleNotFoundError: No module named '_tkinter'`. On macOS install the
+  matching formula, e.g. `brew install python-tk@3.14`. The python.org
+  installer already includes Tk.
 - Dependencies (`requirements.txt`):
   - `requests` — NEIS meal API and comci.net timetable
   - `Pillow` — wallpaper rendering
+  - `customtkinter` — application window widgets
   - `pystray` — system tray
   - `pyinstaller` — standalone builds
   - `pyobjc-framework-Cocoa` — macOS only, installed automatically by the

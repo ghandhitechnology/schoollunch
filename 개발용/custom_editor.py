@@ -14,13 +14,15 @@ import threading
 import tkinter as tk
 from tkinter import colorchooser, filedialog
 
+import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 import config
+import dialogs
 import fetch_timetable
 import render
-import ui_common
-from ui_common import ThemedButton, font as _font
+from ui_common import (COLORS, RADIUS, SPACE, TYPE, font as _font,
+                       resolve as _color)
 
 EDITOR_SIZE = (1920, 1080)
 HANDLE_PX = 12
@@ -48,12 +50,14 @@ def _rect_contains(rect, x, y):
 
 
 class CustomWallpaperEditor:
-    def __init__(self, root, on_back, set_status, on_regenerate=None):
-        self.root = root
+    def __init__(self, parent, on_back, set_status, on_regenerate=None):
+        self.parent = parent
+        # 키 바인딩과 대화상자는 최상위 창을 기준으로 걸어야 한다
+        self.root = parent.winfo_toplevel()
         self.on_back = on_back
         self.set_status = set_status
         self.on_regenerate = on_regenerate
-        self.frame = tk.Frame(root)
+        self.frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.canvas = None
         self.toolbar = None
         self.photo = None
@@ -73,16 +77,10 @@ class CustomWallpaperEditor:
         self.saving = False
         self.regenerate_after_save = False
         self.buttons = []
-        self.mode_buttons = {}
+        self.mode_button = None
         self.ui_queue = queue.Queue()
         self.ink_var = tk.StringVar(value="#245cff")
-        self._palette = None
         self.build()
-
-    def palette(self):
-        if self._palette is None:
-            self._palette = ui_common.palette(config.load_config().get("ui_theme"))
-        return self._palette
 
     def ui_after(self, callback, *args):
         self.ui_queue.put((callback, args))
@@ -101,45 +99,58 @@ class CustomWallpaperEditor:
         except (RuntimeError, tk.TclError):
             return
 
+    MODE_LABELS = {"select": "선택", "pen": "펜", "eraser": "지우개"}
+
     def build(self):
-        self.toolbar = tk.Frame(self.frame)
-        self.toolbar.pack(fill="x", padx=12, pady=(10, 4))
-        row1 = tk.Frame(self.toolbar)
+        self.toolbar = ctk.CTkFrame(self.frame, fg_color="transparent")
+        self.toolbar.pack(fill="x", padx=SPACE["md"], pady=(SPACE["md"], SPACE["sm"]))
+        row1 = ctk.CTkFrame(self.toolbar, fg_color="transparent")
         row1.pack(fill="x")
-        row2 = tk.Frame(self.toolbar)
-        row2.pack(fill="x", pady=(6, 0))
+        row2 = ctk.CTkFrame(self.toolbar, fg_color="transparent")
+        row2.pack(fill="x", pady=(SPACE["sm"], 0))
         self.toolbar_rows = [row1, row2]
 
-        self._button(row1, "뒤로", self.back).pack(side="left", padx=(0, 6))
-        self._button(row1, "저장", self.save).pack(side="left", padx=(0, 14))
-        self._button(row1, "배경화면 저장", lambda: self.save(regenerate=True)).pack(side="left", padx=(0, 14))
-        self._button(row1, "배경 이미지", self.choose_background).pack(side="left", padx=(0, 6))
-        self._button(row1, "스티커 추가", self.add_sticker).pack(side="left", padx=(0, 6))
-        self._button(row1, "스티커 삭제", self.delete_selected_sticker).pack(side="left", padx=(0, 14))
-        self._button(row1, "회전 -", lambda: self.rotate_selected_sticker(-15)).pack(side="left", padx=(0, 6))
-        self.rotation_label = tk.Label(row1, text="회전 0°", font=_font(12, "bold"))
+        self._button(row1, "← 뒤로", self.back, width=72).pack(side="left", padx=(0, SPACE["md"]))
+        self._button(row1, "저장", self.save, primary=True, width=64).pack(side="left", padx=(0, SPACE["xs"]))
+        self._button(row1, "저장 후 적용", lambda: self.save(regenerate=True),
+                     width=104).pack(side="left", padx=(0, SPACE["md"]))
+        self._button(row1, "배경 이미지", self.choose_background, width=96).pack(side="left", padx=(0, SPACE["xs"]))
+        self._button(row1, "스티커 추가", self.add_sticker, width=96).pack(side="left", padx=(0, SPACE["xs"]))
+        self._button(row1, "스티커 삭제", self.delete_selected_sticker, width=96).pack(side="left", padx=(0, SPACE["md"]))
+        self._button(row1, "↺", lambda: self.rotate_selected_sticker(-15), width=34).pack(side="left")
+        self.rotation_label = ctk.CTkLabel(row1, text="0°", width=42,
+                                           font=_font(TYPE["caption"], "bold"))
         self.rotation_label.pack(side="left")
-        self._button(row1, "회전 +", lambda: self.rotate_selected_sticker(15)).pack(side="left", padx=(6, 0))
+        self._button(row1, "↻", lambda: self.rotate_selected_sticker(15), width=34).pack(side="left")
 
-        for label, mode in (("선택", "select"), ("펜", "pen"), ("지우개", "eraser")):
-            button = self._button(row2, label, lambda m=mode: self.set_mode(m))
-            button.pack(side="left", padx=(0, 6))
-            self.mode_buttons[mode] = button
-        self._button(row2, "드로잉 지움", self.clear_drawing).pack(side="left", padx=(0, 6))
-        self._button(row2, "시간표 편집", self.edit_timetable).pack(side="left", padx=(0, 14))
+        self.mode_button = ctk.CTkSegmentedButton(
+            row2, values=[self.MODE_LABELS[m] for m in ("select", "pen", "eraser")],
+            command=self._on_mode_label, font=_font(TYPE["body"]),
+            corner_radius=RADIUS["sm"], selected_color=COLORS["accent"],
+            selected_hover_color=COLORS["accent_hover"],
+            unselected_color=COLORS["surface_alt"],
+            unselected_hover_color=COLORS["nav_hover"], text_color=COLORS["text"])
+        self.mode_button.set(self.MODE_LABELS["select"])
+        self.mode_button.pack(side="left", padx=(0, SPACE["md"]))
 
-        swatch = tk.Canvas(row2, width=32, height=32, highlightthickness=0)
+        self._button(row2, "드로잉 지움", self.clear_drawing, width=96).pack(side="left", padx=(0, SPACE["xs"]))
+        self._button(row2, "시간표 편집", self.edit_timetable, width=96).pack(side="left", padx=(0, SPACE["md"]))
+
+        swatch = tk.Canvas(row2, width=30, height=30, highlightthickness=0,
+                           bd=0, bg=_color("surface"))
         swatch.pack(side="left")
         swatch.bind("<Button-1>", lambda _e: self.pick_color())
         self.swatch = swatch
 
-        self._button(row2, "글자 −", lambda: self.adjust_font_scale(-0.1)).pack(side="left", padx=(14, 6))
-        self.font_scale_label = tk.Label(row2, text="글자 100%", font=_font(12, "bold"))
+        self._button(row2, "가−", lambda: self.adjust_font_scale(-0.1), width=44).pack(
+            side="left", padx=(SPACE["md"], 0))
+        self.font_scale_label = ctk.CTkLabel(row2, text="100%", width=52,
+                                             font=_font(TYPE["caption"], "bold"))
         self.font_scale_label.pack(side="left")
-        self._button(row2, "글자 +", lambda: self.adjust_font_scale(0.1)).pack(side="left", padx=(6, 0))
+        self._button(row2, "가+", lambda: self.adjust_font_scale(0.1), width=44).pack(side="left")
 
-        self.canvas = tk.Canvas(self.frame, highlightthickness=1)
-        self.canvas.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.canvas = tk.Canvas(self.frame, highlightthickness=1, bd=0)
+        self.canvas.pack(fill="both", expand=True, padx=SPACE["md"], pady=(0, SPACE["md"]))
         self.canvas.bind("<Configure>", lambda _e: self.on_canvas_resize())
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -148,44 +159,51 @@ class CustomWallpaperEditor:
         self.apply_style()
         self.root.after(25, self.pump_ui_queue)
 
-    def _button(self, parent, text, command):
-        b = ThemedButton(parent, text, command, font=_font(12, "bold"))
+    def _button(self, parent, text, command, primary=False, width=None, font=None):
+        opts = dict(text=text, command=command, height=32,
+                    corner_radius=RADIUS["sm"], font=font or _font(TYPE["body"]))
+        if width is not None:
+            opts["width"] = width
+        if primary:
+            opts.update(fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"])
+        else:
+            opts.update(fg_color="transparent", hover_color=COLORS["nav_hover"],
+                        text_color=COLORS["text"], border_width=1,
+                        border_color=COLORS["border"])
+        b = ctk.CTkButton(parent, **opts)
         self.buttons.append(b)
         return b
 
     def apply_style(self):
-        p = self.palette()
-        self.frame.configure(bg=p["bg"])
-        self.toolbar.configure(bg=p["panel"])
-        for toolbar_row in self.toolbar_rows:
-            toolbar_row.configure(bg=p["panel"])
-        self.canvas.configure(bg=p["canvas_bg"], highlightbackground=p["border"])
-        self.font_scale_label.configure(bg=p["panel"], fg=p["fg"])
-        self.rotation_label.configure(bg=p["panel"], fg=p["fg"])
-        for button in self.buttons:
-            button.set_palette(p)
-        active = self.mode.get()
-        for mode, button in self.mode_buttons.items():
-            button.set_selected(mode == active)
+        """CTk 위젯은 스스로 테마를 따르므로 raw 캔버스 색만 맞춰 주면 된다."""
+        self.canvas.configure(bg=_color("canvas"), highlightbackground=_color("border"))
+        self.swatch.configure(bg=_color("surface"))
         self.draw_swatch()
 
     def set_busy(self, value):
         self.saving = value
         for button in self.buttons:
             if button.winfo_exists():
-                button.set_enabled(not value)
+                button.configure(state="disabled" if value else "normal")
+        if self.mode_button and self.mode_button.winfo_exists():
+            self.mode_button.configure(state="disabled" if value else "normal")
 
     def draw_swatch(self):
         self.swatch.delete("all")
-        self.swatch.create_oval(4, 4, 28, 28, fill=self.ink_var.get(),
-                                outline=self.palette()["border"], width=2)
+        self.swatch.create_oval(3, 3, 27, 27, fill=self.ink_var.get(),
+                                outline=_color("border"), width=2)
+
+    def _on_mode_label(self, label):
+        for mode, text in self.MODE_LABELS.items():
+            if text == label:
+                self.set_mode(mode)
+                return
 
     def set_mode(self, mode):
         self.mode.set(mode)
-        for name, button in self.mode_buttons.items():
-            button.set_selected(name == mode)
-        labels = {"select": "선택", "pen": "펜", "eraser": "지우개"}
-        self.set_status(f"커스텀 배경: {labels.get(mode, mode)}")
+        if self.mode_button and self.mode_button.winfo_exists():
+            self.mode_button.set(self.MODE_LABELS.get(mode, mode))
+        self.set_status(f"커스텀 배경: {self.MODE_LABELS.get(mode, mode)}")
 
     def load_state(self):
         cfg = config.load_config()
@@ -199,8 +217,7 @@ class CustomWallpaperEditor:
                 self.drawing = Image.new("RGBA", EDITOR_SIZE, (0, 0, 0, 0))
         else:
             self.drawing = Image.new("RGBA", EDITOR_SIZE, (0, 0, 0, 0))
-        self._palette = None  # 메인 화면에서 테마가 바뀌었을 수 있다
-        self.apply_style()
+        self.apply_style()  # 시스템 라이트/다크가 바뀌었을 수 있다
         self.update_font_scale_label()
         self.update_overlays()
         self.request_preview(30)
@@ -234,7 +251,7 @@ class CustomWallpaperEditor:
 
     def update_font_scale_label(self):
         scale = config._safe_font_scale(self.custom.get("font_scale", 1.0))
-        self.font_scale_label.configure(text=f"글자 {round(scale * 100)}%")
+        self.font_scale_label.configure(text=f"{round(scale * 100)}%")
 
     def pick_color(self):
         color = colorchooser.askcolor(color=self.ink_var.get(), parent=self.root)[1]
@@ -417,12 +434,12 @@ class CustomWallpaperEditor:
         self.update_layout()
         ox, oy, pw, ph = self.preview_box
         if self.image_item is None and not self.placeholder_items:
-            p = self.palette()
             self.placeholder_items = [
                 self.canvas.create_rectangle(ox, oy, ox + pw, oy + ph,
-                                             fill=p["canvas_bg"], outline=p["border"]),
+                                             fill=_color("canvas"), outline=_color("border")),
                 self.canvas.create_text(ox + pw / 2, oy + ph / 2, text="미리보기 생성 중...",
-                                        fill=p["dim"], font=_font(13, "bold")),
+                                        fill=_color("text_dim"),
+                                        font=_font(TYPE["body"], "bold")),
             ]
             self.canvas.tag_raise("overlay")
         self.preview_busy = True
@@ -477,16 +494,16 @@ class CustomWallpaperEditor:
         if not self.canvas or not self.canvas.winfo_exists():
             return
         self.canvas.delete("overlay")
-        p = self.palette()
+        accent, border, dim = _color("accent"), _color("border"), _color("text_dim")
         labels = {"prompt": "프롬프트", "timetable": "시간표", "meal": "급식"}
         for name, rect in self.custom.get("layout", {}).items():
             self.draw_rect(rect, labels.get(name, name),
-                           p["accent"] if self.selected == ("panel", name) else p["border"])
+                           accent if self.selected == ("panel", name) else border)
         for idx, sticker in enumerate(self.custom.get("stickers", [])):
             angle = round(config._safe_angle(sticker.get("angle", 0)))
             is_selected = (self.selected == ("sticker", idx))
             self.draw_rect(sticker.get("rect", [0, 0, 0.1, 0.1]), f"스티커 {idx + 1} · {angle}°",
-                           p["accent"] if is_selected else p["dim"],
+                           accent if is_selected else dim,
                            angle=angle, show_rotate=is_selected)
         self.update_rotation_label()
 
@@ -557,7 +574,7 @@ class CustomWallpaperEditor:
     def update_rotation_label(self):
         sticker = self.selected_sticker()
         angle = round(config._safe_angle(sticker.get("angle", 0))) if sticker else 0
-        self.rotation_label.configure(text=f"회전 {angle}°")
+        self.rotation_label.configure(text=f"{angle}°")
 
     def hit_test(self, nx, ny):
         for idx in reversed(range(len(self.custom.get("stickers", [])))):
@@ -755,110 +772,14 @@ class CustomWallpaperEditor:
                 self.edit_timetable()
 
     def edit_timetable(self):
-        meals, timetable = self.sample_data()
+        _meals, timetable = self.sample_data()
 
-        dialog = tk.Toplevel(self.root)
-        dialog.title("시간표 직접 편집")
-        dialog.geometry("460x480")
-        p = self.palette()
-        dialog.configure(bg=p["bg"])
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        title_lbl = tk.Label(dialog, text="시간표 직접 편집", font=_font(14, "bold"),
-                             bg=p["bg"], fg=p["fg"])
-        title_lbl.pack(pady=(12, 4))
-
-        desc_lbl = tk.Label(dialog, text="교시별 시간, 과목, 교사 이름을 직접 수정합니다.",
-                            font=_font(10), bg=p["bg"], fg=p["dim"])
-        desc_lbl.pack(pady=(0, 12))
-
-        frame_container = tk.Frame(dialog, bg=p["bg"])
-        frame_container.pack(fill="both", expand=True, padx=14, pady=4)
-
-        headers_frame = tk.Frame(frame_container, bg=p["bg"])
-        headers_frame.pack(fill="x", pady=2)
-        tk.Label(headers_frame, text="교시", width=6, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
-        tk.Label(headers_frame, text="시간 (예: 08:40)", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
-        tk.Label(headers_frame, text="과목", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
-        tk.Label(headers_frame, text="교사", width=11, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
-
-        periods = list(timetable.get("periods") or [])
-        while len(periods) < 7:
-            p_num = len(periods) + 1
-            periods.append({
-                "period": p_num,
-                "time": "",
-                "subject": "",
-                "teacher": ""
-            })
-
-        entries = []
-        for period in periods:
-            p_num = period.get("period", 1)
-            time_val = period.get("time") or ""
-            sub_val = period.get("subject") or ""
-            tch_val = period.get("teacher") or ""
-
-            p_frame = tk.Frame(frame_container, bg=p["bg"])
-            p_frame.pack(fill="x", pady=3)
-
-            tk.Label(p_frame, text=f"{p_num}교시", width=6, font=_font(11), bg=p["bg"], fg=p["fg"]).pack(side="left")
-
-            time_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
-                                insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
-                                highlightbackground=p["border"], highlightcolor=p["accent"])
-            time_ent.insert(0, time_val)
-            time_ent.pack(side="left")
-
-            sub_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
-                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
-                               highlightbackground=p["border"], highlightcolor=p["accent"])
-            sub_ent.insert(0, sub_val)
-            sub_ent.pack(side="left", padx=4)
-
-            tch_ent = tk.Entry(p_frame, width=11, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
-                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
-                               highlightbackground=p["border"], highlightcolor=p["accent"])
-            tch_ent.insert(0, tch_val)
-            tch_ent.pack(side="left")
-
-            entries.append((p_num, time_ent, sub_ent, tch_ent))
-
-        def on_save():
-            new_periods = []
-            for p_num, time_ent, sub_ent, tch_ent in entries:
-                time_str = time_ent.get().strip()
-                sub_str = sub_ent.get().strip()
-                tch_str = tch_ent.get().strip()
-                if time_str or sub_str or tch_str:
-                    new_periods.append({
-                        "period": p_num,
-                        "time": time_str,
-                        "subject": sub_str,
-                        "teacher": tch_str
-                    })
-
-            timetable["periods"] = new_periods
-            timetable["_edited"] = True
-
-            config.save_cache_entry("timetable", timetable)
-            dialog.destroy()
-
+        def saved(_timetable):
             self.update_overlays()
             self.request_preview(30)
-            self.set_status("시간표가 직접 수정되었습니다 (저장을 눌러야 배경화면에 완전히 반영됩니다)")
+            self.set_status("시간표를 직접 수정했습니다 — 저장을 눌러야 배경화면에 반영됩니다")
 
-        btn_frame = tk.Frame(dialog, bg=p["bg"])
-        btn_frame.pack(fill="x", pady=12, side="bottom")
-
-        cancel_btn = ThemedButton(btn_frame, "취소", dialog.destroy, font=_font(11, "bold"))
-        cancel_btn.set_palette(p)
-        cancel_btn.pack(side="right", padx=(6, 14))
-
-        save_btn = ThemedButton(btn_frame, "확인", on_save, font=_font(11, "bold"))
-        save_btn.set_palette(p)
-        save_btn.pack(side="right", padx=6)
+        dialogs.open_timetable_editor(self.root, timetable, on_saved=saved)
 
     def draw_at(self, x0, y0, x1, y1):
         p0 = (round(x0 * EDITOR_SIZE[0]), round(y0 * EDITOR_SIZE[1]))

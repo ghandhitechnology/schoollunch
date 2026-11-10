@@ -5,6 +5,7 @@
 (사용자 실제 설정을 건드리지 않도록 모든 경로를 임시 폴더로 바꾼다)
 """
 import copy
+import datetime
 import json
 import math
 import os
@@ -335,6 +336,152 @@ class UiFormatting(unittest.TestCase):
               "periods": [{"period": 1, "time": None, "subject": None, "teacher": None}]}
         lines = app_ui.format_timetable_lines(tt)
         self.assertEqual(len(lines), 2)
+
+
+class SchedulerDecisions(unittest.TestCase):
+    """가짜 시계로 자동 갱신 판단 로직만 검증한다 (스레드/네트워크 없음)."""
+
+    TODAY = datetime.date(2026, 8, 5)
+
+    def decide(self, **overrides):
+        import scheduler
+        base = dict(today=self.TODAY, last_success_date=self.TODAY,
+                    seconds_since_success=10.0, seconds_since_failure=None,
+                    wall_gap=float(scheduler.TICK_SEC), interval_min=60, fail_count=0)
+        base.update(overrides)
+        return scheduler.decide(**base)
+
+    def test_quiet_when_nothing_changed(self):
+        should, _reason = self.decide()
+        self.assertFalse(should)
+
+    def test_first_run_refreshes(self):
+        should, reason = self.decide(last_success_date=None)
+        self.assertTrue(should)
+        self.assertIn("최초", reason)
+
+    def test_date_rollover_refreshes(self):
+        should, reason = self.decide(last_success_date=datetime.date(2026, 8, 4))
+        self.assertTrue(should)
+        self.assertIn("날짜", reason)
+
+    def test_date_rollover_fires_even_when_interval_off(self):
+        """'끔'은 주기 폴링만 끄고 자정 넘김 갱신은 남긴다 (어제 급식 방지)."""
+        should, _reason = self.decide(last_success_date=datetime.date(2026, 8, 4),
+                                      interval_min=0)
+        self.assertTrue(should)
+
+    def test_sleep_gap_refreshes(self):
+        import scheduler
+        should, reason = self.decide(wall_gap=scheduler.WAKE_GAP_SEC + 1)
+        self.assertTrue(should)
+        self.assertIn("절전", reason)
+
+    def test_small_gap_is_not_a_wake(self):
+        import scheduler
+        should, _reason = self.decide(wall_gap=scheduler.WAKE_GAP_SEC - 1)
+        self.assertFalse(should)
+
+    def test_interval_expiry(self):
+        self.assertFalse(self.decide(seconds_since_success=3599)[0])
+        self.assertTrue(self.decide(seconds_since_success=3600)[0])
+
+    def test_interval_off_never_polls(self):
+        should, _reason = self.decide(seconds_since_success=10 ** 6, interval_min=0)
+        self.assertFalse(should)
+
+    def test_backoff_ramp(self):
+        import scheduler
+        expected = [60, 120, 240, 480, 900, 900]
+        self.assertEqual([scheduler.backoff_delay(i) for i in range(1, 7)], expected)
+        for fails, delay in enumerate(expected, start=1):
+            self.assertFalse(self.decide(fail_count=fails,
+                                         seconds_since_failure=delay - 1)[0],
+                             f"{fails}회 실패는 {delay}초 전에 재시도하면 안 된다")
+            self.assertTrue(self.decide(fail_count=fails,
+                                        seconds_since_failure=delay)[0])
+
+    def test_backoff_outranks_other_triggers(self):
+        """네트워크가 끊긴 동안 날짜 변경이 매 tick 재시도를 유발하면 안 된다."""
+        should, _reason = self.decide(fail_count=2, seconds_since_failure=5,
+                                      last_success_date=datetime.date(2026, 8, 4),
+                                      wall_gap=10 ** 5)
+        self.assertFalse(should)
+
+    def test_clock_jumping_backwards_is_clamped(self):
+        import scheduler
+        self.assertEqual(scheduler._elapsed(100.0, 500.0), 0.0)
+        self.assertIsNone(scheduler._elapsed(100.0, None))
+
+
+class SchedulerLoop(IsolatedConfigTest):
+    """RefreshScheduler 의 상태 전이를 가짜 시계로 돌린다."""
+
+    def make(self, results):
+        """results: run_refresh 가 순서대로 돌려줄 값 목록."""
+        import scheduler
+        clock = {"now": 1_800_000.0}
+        calls = []
+
+        def run_refresh():
+            calls.append(clock["now"])
+            return results.pop(0) if results else True
+
+        sched = scheduler.RefreshScheduler(
+            run_refresh, load_config=config.load_config, log=lambda _m: None,
+            clock=lambda: clock["now"])
+        return sched, clock, calls
+
+    def test_busy_result_does_not_touch_state(self):
+        sched, clock, calls = self.make([None])
+        sched.seed(True)
+        before = sched.status()
+        sched.refresh("테스트")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sched.status()["fail_count"], before["fail_count"])
+        self.assertEqual(sched.status()["last_success_wall"], before["last_success_wall"])
+
+    def test_failure_then_recovery_resets_backoff(self):
+        sched, clock, calls = self.make([False, False, True])
+        sched.seed(True)
+        sched.refresh("실패 1")
+        self.assertEqual(sched.status()["fail_count"], 1)
+        sched.refresh("실패 2")
+        self.assertEqual(sched.status()["fail_count"], 2)
+        sched.refresh("성공")
+        self.assertEqual(sched.status()["fail_count"], 0)
+        self.assertEqual(sched.status()["last_success_wall"], clock["now"])
+
+    def test_tick_reads_interval_from_disk_each_time(self):
+        """설정 창은 별도 프로세스다 — 트레이 재시작 없이 주기 변경이 먹어야 한다."""
+        sched, clock, calls = self.make([])
+        cfg = config.load_config()
+        cfg["refresh_interval_min"] = 30
+        config.save_config(cfg)
+        self.assertEqual(sched.current_interval(), 30)
+        cfg["refresh_interval_min"] = 180
+        config.save_config(cfg)
+        self.assertEqual(sched.current_interval(), 180)
+
+    def test_tick_fires_on_interval_and_then_goes_quiet(self):
+        sched, clock, calls = self.make([])
+        cfg = config.load_config()
+        cfg["refresh_interval_min"] = 30
+        config.save_config(cfg)
+        sched.seed(True)
+        sched._prev_tick_wall = clock["now"]
+
+        clock["now"] += 20  # 20초 뒤 — 아직 주기 전
+        self.assertFalse(sched.tick())
+        self.assertEqual(calls, [])
+
+        clock["now"] += 30 * 60  # 주기 경과 (동시에 큰 벽시계 공백 = 절전 해제로도 잡힌다)
+        self.assertTrue(sched.tick())
+        self.assertEqual(len(calls), 1)
+
+        clock["now"] += 20  # 갱신 직후 — 조용해야 한다
+        self.assertFalse(sched.tick())
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,16 @@ DEFAULT_UI_THEME = "black_on_white"
 VALID_GRADES = (1,)
 VALID_CLASSES = (1, 2, 3, 4)
 
+# 백그라운드 자동 갱신 주기(분). 0은 주기 갱신 없음.
+# 0이어도 날짜 변경(자정 넘김)에는 갱신한다 — 어제 급식을 띄워두는 게 이 앱의 핵심 버그였다.
+VALID_REFRESH_INTERVALS = (0, 30, 60, 180)
+REFRESH_INTERVAL_LABELS = {
+    0: "끔",
+    30: "30분",
+    60: "1시간",
+    180: "3시간",
+}
+
 
 def app_dir() -> str:
     if sys.platform == "win32":
@@ -63,6 +73,8 @@ DEFAULTS = {
     "background_image": "",   # 비우면 레트로 단색 배경
     "ui_theme": DEFAULT_UI_THEME,
     "autostart": True,
+    "refresh_interval_min": 60,  # 백그라운드 자동 갱신 주기
+
     "configured": False,      # 최초 설정창을 거쳤는지
     "neis": {},               # {"atpt": "E10", "code": "7310058"} 캐시
     "comcigan_code": 0,       # 컴시간알리미 학교 코드 캐시
@@ -139,6 +151,11 @@ def _safe_choice(value, choices, default):
     return value if value in choices else default
 
 
+def safe_refresh_interval(value) -> int:
+    """자동 갱신 주기를 허용값 중 하나로 정규화한다 (스케줄러에서도 쓴다)."""
+    return _safe_choice(value, VALID_REFRESH_INTERVALS, DEFAULTS["refresh_interval_min"])
+
+
 def _safe_font_scale(value) -> float:
     try:
         scale = float(value)
@@ -166,6 +183,7 @@ def load_config() -> dict:
     if not isinstance(cfg.get("background_image"), str):
         cfg["background_image"] = ""
     cfg["autostart"] = bool(cfg.get("autostart", True))
+    cfg["refresh_interval_min"] = safe_refresh_interval(cfg.get("refresh_interval_min"))
     names = cfg.get("teacher_names")
     cfg["teacher_names"] = [n.strip() for n in names
                             if isinstance(n, str) and n.strip()] if isinstance(names, list) else []

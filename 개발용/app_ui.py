@@ -1,20 +1,35 @@
 # -*- coding: utf-8 -*-
-"""Full tkinter application UI for configuring, generating, and applying wallpaper."""
+"""앱 메인 창 — 사이드바 내비게이션(홈 / 꾸미기 / 설정).
+
+창의 외관은 바탕화면 테마와 분리되어 있다(ui_common 참고). 테마를 바꿔도
+앱 크롬 색은 그대로고, 미리보기 이미지만 다시 그려진다.
+
+스레드 규칙은 그대로다: 네트워크·렌더는 데몬 스레드에서 하고 Tk 위젯은
+ui_after() 큐를 거쳐 메인 스레드에서만 만진다.
+"""
+import datetime
+import os
 import queue
 import threading
 import tkinter as tk
 from tkinter import filedialog
 
-from PIL import ImageTk
+import customtkinter as ctk
 
 import autostart
 import config
-from custom_editor import CustomWallpaperEditor
+import dialogs
 import fetch_meal
 import fetch_timetable
 import render
 import wallpaper
-from ui_common import PALETTES, ThemedButton, font as _font, theme_key as _theme_key
+from custom_editor import CustomWallpaperEditor
+from ui_common import (COLORS, RADIUS, SPACE, TYPE, card, font as _font,
+                       init_appearance, mono_font, section_label,
+                       theme_key as _theme_key)
+
+NAV_ITEMS = (("home", "홈"), ("editor", "꾸미기"), ("settings", "설정"))
+PREVIEW_SUPERSAMPLE = 2  # 고해상도 화면에서 미리보기가 뭉개지지 않도록 크게 렌더한 뒤 축소
 
 
 def format_timetable_lines(timetable):
@@ -40,79 +55,52 @@ def format_meal_lines(meals):
     return lines
 
 
+def last_render_label() -> str:
+    """바탕화면 파일의 수정 시각. 트레이(별도 프로세스)가 갱신해도 여기 반영된다."""
+    try:
+        stamp = datetime.datetime.fromtimestamp(os.path.getmtime(config.WALLPAPER_PATH))
+    except OSError:
+        return "아직 만든 적 없음"
+    if stamp.date() == datetime.date.today():
+        return f"마지막 갱신 {stamp:%H:%M}"
+    return f"마지막 갱신 {stamp:%m/%d %H:%M}"
+
+
 def show_app(on_save=None) -> bool:
     cfg = config.load_config()
     saved = {"ok": False}
-    state = {"busy": False}
+    state = {"busy": False, "page": None}
 
-    root = tk.Tk()
+    init_appearance()
+    root = ctk.CTk()
     root.title("하태욱 프로그램")
-    root.geometry("1120x720")
-    root.minsize(980, 620)
+    root.geometry("1180x760")
+    root.minsize(1000, 660)
+
+    theme_labels = {label: key for key, label in config.UI_THEMES.items()}
+    interval_labels = {label: minutes
+                       for minutes, label in config.REFRESH_INTERVAL_LABELS.items()}
 
     class_var = tk.StringVar(value=f"{cfg.get('grade', 1)}-{cfg.get('class_num', 1)}")
-    theme_labels = {label: key for key, label in config.UI_THEMES.items()}
-    theme_var = tk.StringVar(value=config.UI_THEMES[_theme_key(cfg.get("ui_theme", config.DEFAULT_UI_THEME))])
+    theme_var = tk.StringVar(
+        value=config.UI_THEMES[_theme_key(cfg.get("ui_theme", config.DEFAULT_UI_THEME))])
     bg_var = tk.StringVar(value=cfg.get("background_image", ""))
     auto_var = tk.BooleanVar(value=cfg.get("autostart", True))
+    interval_var = tk.StringVar(
+        value=config.REFRESH_INTERVAL_LABELS[
+            config.safe_refresh_interval(cfg.get("refresh_interval_min"))])
     status_var = tk.StringVar(value="준비됨")
+    path_var = tk.StringVar(value=config.WALLPAPER_PATH)
+    last_var = tk.StringVar(value=last_render_label())
 
-    widgets = []
-    buttons = []
-    wallpaper_buttons = []
-    option_menus = []
     editor_holder = {}
+    pages = {}
+    nav_buttons = {}
+    action_buttons = []   # 배경화면 생성/적용 — 데이터 새로고침 중에도 잠근다
+    all_buttons = []      # 무거운 작업 중 전부 잠근다
     ui_queue = queue.Queue()
 
-    def palette():
-        return PALETTES[theme_labels.get(theme_var.get(), config.DEFAULT_UI_THEME)]
-
-    def remember(widget, kind="normal"):
-        widgets.append((widget, kind))
-        return widget
-
-    def section(parent, title):
-        p = palette()
-        frame = tk.Frame(parent, bg=p["panel"], highlightthickness=1, highlightbackground=p["border"])
-        label = tk.Label(frame, text=f"[ {title} ]", font=_font(13, "bold"), anchor="w")
-        label.pack(fill="x", padx=10, pady=(8, 2))
-        remember(frame, "panel")
-        remember(label, "label")
-        return frame
-
-    def style_all():
-        p = palette()
-        root.configure(bg=p["bg"])
-        for widget, kind in widgets:
-            if not widget.winfo_exists():
-                continue
-            if kind == "panel":
-                widget.configure(bg=p["panel"], highlightbackground=p["border"])
-            elif kind == "canvas":
-                widget.configure(bg=p["panel_alt"], highlightbackground=p["border"])
-            elif kind == "alt":
-                widget.configure(bg=p["panel_alt"], fg=p["fg"])
-                if isinstance(widget, tk.Text):
-                    widget.configure(
-                        insertbackground=p["fg"],
-                        selectbackground=p["border"],
-                        selectforeground=p["button_fg"],
-                        highlightbackground=p["border"],
-                        highlightcolor=p["border"],
-                    )
-            elif kind == "dim":
-                widget.configure(bg=p["panel"], fg=p["dim"])
-            else:
-                widget.configure(bg=p["panel"], fg=p["fg"])
-        for button in buttons:
-            if button.winfo_exists():
-                button.set_palette(p)
-        for menu in option_menus:
-            if menu.winfo_exists():
-                menu.configure(bg=p["panel"], fg=p["fg"], activebackground=p["accent"],
-                               activeforeground=p["button_fg"], highlightbackground=p["border"])
-                menu["menu"].configure(bg=p["panel"], fg=p["fg"])
-
+    # ── 스레드 → UI 마샬링 (기존 구조 유지) ──
     def ui_after(callback, *args):
         ui_queue.put((callback, args))
 
@@ -130,6 +118,10 @@ def show_app(on_save=None) -> bool:
         except (RuntimeError, tk.TclError):
             return
 
+    def set_status(text):
+        status_var.set(text)
+
+    # ── 설정 읽기/쓰기 ──
     def current_config():
         """저장하지 않고 현재 UI 상태를 설정 dict로 만든다 (미리보기용)."""
         latest = config.load_config()
@@ -138,6 +130,8 @@ def show_app(on_save=None) -> bool:
         latest["background_image"] = bg_var.get()
         latest["ui_theme"] = theme_labels.get(theme_var.get(), config.DEFAULT_UI_THEME)
         latest["autostart"] = auto_var.get()
+        latest["refresh_interval_min"] = interval_labels.get(
+            interval_var.get(), config.DEFAULTS["refresh_interval_min"])
         return latest
 
     def collect_config():
@@ -153,219 +147,65 @@ def show_app(on_save=None) -> bool:
         def run():
             try:
                 autostart.apply(enabled)
-                ui_after(status_var.set, "설정 저장됨")
+                ui_after(set_status, "설정 저장됨")
             except Exception as e:
                 config.log(f"자동 실행 설정 실패: {e!r}")
-                ui_after(status_var.set, "설정 저장됨, 자동 실행 설정 실패")
+                ui_after(set_status, "설정 저장됨, 자동 실행 설정 실패")
         threading.Thread(target=run, daemon=True).start()
 
-    def save_config():
+    def save_settings():
         current = collect_config()
         if on_save:
             on_save(current)
         apply_autostart_async(current["autostart"])
-        status_var.set("설정 저장됨")
+        set_status("설정 저장됨")
 
+    # ── 잠금 ──
     def set_buttons_enabled(targets, enabled):
         for button in targets:
             if button.winfo_exists():
-                button.set_enabled(enabled)
+                button.configure(state="normal" if enabled else "disabled")
 
     def set_busy(value, text=None, scope="all"):
         if scope == "all":
             state["busy"] = value
         if text:
-            status_var.set(text)
-        targets = buttons if scope == "all" else wallpaper_buttons
-        set_buttons_enabled(targets, not value)
+            set_status(text)
+        set_buttons_enabled(all_buttons if scope == "all" else action_buttons, not value)
 
-    def show_main():
-        if "editor" in editor_holder:
-            editor_holder["editor"].hide()
-        outer.pack(fill="both", expand=True, padx=18, pady=18)
-        status_var.set("준비됨")
-        request_preview(50)  # 에디터에서 레이아웃이 바뀌었을 수 있다
-
-    def show_custom_editor():
-        if state["busy"]:
+    # ── 내비게이션 ──
+    def show_page(name):
+        if state["page"] == name:
             return
-        collect_config()
-        outer.pack_forget()
-        if "editor" not in editor_holder:
-            editor_holder["editor"] = CustomWallpaperEditor(
-                root, show_main, status_var.set, on_regenerate=lambda: worker(True)
+        if state["page"] == "editor" and "editor" in editor_holder:
+            editor_holder["editor"].hide()
+        state["page"] = name
+        for frame in pages.values():
+            frame.grid_remove()
+        pages[name].grid(row=0, column=0, sticky="nsew")
+        for key, button in nav_buttons.items():
+            active = key == name
+            button.configure(
+                fg_color=COLORS["nav_active"] if active else "transparent",
+                text_color=COLORS["text"] if active else COLORS["text_dim"],
+                font=_font(TYPE["body"], "bold" if active else "normal"),
             )
-        editor_holder["editor"].show()
+        if name == "editor":
+            collect_config()  # 에디터는 저장된 설정을 읽어 렌더한다
+            if "editor" not in editor_holder:
+                editor_holder["editor"] = CustomWallpaperEditor(
+                    pages["editor"], lambda: show_page("home"), set_status,
+                    on_regenerate=lambda: worker(True))
+            editor_holder["editor"].show()
+        elif name == "home":
+            set_status("준비됨")
+            request_preview(50)  # 에디터에서 레이아웃이 바뀌었을 수 있다
 
-    def edit_teacher_names():
-        p = palette()
-        dialog = tk.Toplevel(root)
-        dialog.title("교사 명단")
-        dialog.geometry("380x460")
-        dialog.configure(bg=p["bg"])
-        dialog.transient(root)
-        info = tk.Label(
-            dialog,
-            text="컴시간알리미는 교사 이름을 '김완*'처럼 가려서 보냅니다.\n"
-                 "전체 이름을 한 줄에 하나씩 입력해 두면, 이름이 정확히\n"
-                 "한 명과 일치할 때 자동으로 전체 이름으로 표시합니다.",
-            font=_font(11), justify="left", anchor="w", bg=p["bg"], fg=p["dim"])
-        info.pack(fill="x", padx=14, pady=(12, 8))
-        roster_text = tk.Text(dialog, font=_font(12), borderwidth=0, highlightthickness=1,
-                              bg=p["panel_alt"], fg=p["fg"], insertbackground=p["fg"],
-                              highlightbackground=p["border"], highlightcolor=p["border"])
-        roster_text.pack(fill="both", expand=True, padx=14)
-        roster_text.insert("1.0", "\n".join(config.load_config().get("teacher_names", [])))
-
-        def save_roster():
-            names = []
-            for line in roster_text.get("1.0", "end").splitlines():
-                name = line.strip()
-                if name and name not in names:
-                    names.append(name)
-            latest = config.load_config()
-            latest["teacher_names"] = names
-            config.save_config(latest)
-            cfg.clear()
-            cfg.update(latest)
-            dialog.destroy()
-            status_var.set(f"교사 명단 저장됨 ({len(names)}명)")
-            fill_cached_data()
-            request_preview()
-
-        footer = tk.Frame(dialog, bg=p["bg"])
-        footer.pack(fill="x", padx=14, pady=10)
-        for text, cmd, side in (("저장", save_roster, "right"), ("닫기", dialog.destroy, "right")):
-            b = ThemedButton(footer, text, cmd, font=_font(12, "bold"))
-            b.set_palette(p)
-            b.pack(side=side, padx=(8, 0))
-        roster_text.focus_set()
-
-    def edit_dashboard_timetable():
-        meals, timetable = cached_display_data()
-
-        p = palette()
-        dialog = tk.Toplevel(root)
-        dialog.title("시간표 직접 편집")
-        dialog.geometry("460x480")
-        dialog.configure(bg=p["bg"])
-        dialog.transient(root)
-        dialog.grab_set()
-
-        title_lbl = tk.Label(dialog, text="시간표 직접 편집", font=_font(14, "bold"),
-                             bg=p["bg"], fg=p["fg"])
-        title_lbl.pack(pady=(12, 4))
-
-        desc_lbl = tk.Label(dialog, text="교시별 시간, 과목, 교사 이름을 직접 수정합니다.",
-                            font=_font(10), bg=p["bg"], fg=p["dim"])
-        desc_lbl.pack(pady=(0, 12))
-
-        frame_container = tk.Frame(dialog, bg=p["bg"])
-        frame_container.pack(fill="both", expand=True, padx=14, pady=4)
-
-        headers_frame = tk.Frame(frame_container, bg=p["bg"])
-        headers_frame.pack(fill="x", pady=2)
-        tk.Label(headers_frame, text="교시", width=6, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
-        tk.Label(headers_frame, text="시간 (예: 08:40)", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left")
-        tk.Label(headers_frame, text="과목", width=13, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
-        tk.Label(headers_frame, text="교사", width=11, font=_font(11, "bold"), bg=p["bg"], fg=p["fg"]).pack(side="left", padx=2)
-
-        periods = list(timetable.get("periods") or [])
-        while len(periods) < 7:
-            p_num = len(periods) + 1
-            periods.append({
-                "period": p_num,
-                "time": "",
-                "subject": "",
-                "teacher": ""
-            })
-
-        entries = []
-        for period in periods:
-            p_num = period.get("period", 1)
-            time_val = period.get("time") or ""
-            sub_val = period.get("subject") or ""
-            tch_val = period.get("teacher") or ""
-
-            p_frame = tk.Frame(frame_container, bg=p["bg"])
-            p_frame.pack(fill="x", pady=3)
-
-            tk.Label(p_frame, text=f"{p_num}교시", width=6, font=_font(11), bg=p["bg"], fg=p["fg"]).pack(side="left")
-
-            time_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
-                                insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
-                                highlightbackground=p["border"], highlightcolor=p["accent"])
-            time_ent.insert(0, time_val)
-            time_ent.pack(side="left")
-
-            sub_ent = tk.Entry(p_frame, width=13, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
-                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
-                               highlightbackground=p["border"], highlightcolor=p["accent"])
-            sub_ent.insert(0, sub_val)
-            sub_ent.pack(side="left", padx=4)
-
-            tch_ent = tk.Entry(p_frame, width=11, font=_font(11), bg=p["panel_alt"], fg=p["fg"],
-                               insertbackground=p["fg"], borderwidth=0, highlightthickness=1,
-                               highlightbackground=p["border"], highlightcolor=p["accent"])
-            tch_ent.insert(0, tch_val)
-            tch_ent.pack(side="left")
-
-            entries.append((p_num, time_ent, sub_ent, tch_ent))
-
-        def on_save():
-            new_periods = []
-            for p_num, time_ent, sub_ent, tch_ent in entries:
-                time_str = time_ent.get().strip()
-                sub_str = sub_ent.get().strip()
-                tch_str = tch_ent.get().strip()
-                if time_str or sub_str or tch_str:
-                    new_periods.append({
-                        "period": p_num,
-                        "time": time_str,
-                        "subject": sub_str,
-                        "teacher": tch_str
-                    })
-
-            timetable["periods"] = new_periods
-            timetable["_edited"] = True
-
-            config.save_cache_entry("timetable", timetable)
-            dialog.destroy()
-
-            fill_cached_data()
-            request_preview(30)
-            status_var.set("시간표가 직접 수정되었습니다 (바탕화면 적용을 눌러야 완전히 반영됩니다)")
-
-        btn_frame = tk.Frame(dialog, bg=p["bg"])
-        btn_frame.pack(fill="x", pady=12, side="bottom")
-
-        cancel_btn = ThemedButton(btn_frame, "취소", dialog.destroy, font=_font(11, "bold"))
-        cancel_btn.set_palette(p)
-        cancel_btn.pack(side="right", padx=(6, 14))
-
-        save_btn = ThemedButton(btn_frame, "확인", on_save, font=_font(11, "bold"))
-        save_btn.set_palette(p)
-        save_btn.pack(side="right", padx=6)
-
-    def choose_background():
-        path = filedialog.askopenfilename(
-            title="배경 이미지 선택",
-            filetypes=[("이미지", "*.png *.jpg *.jpeg *.bmp"), ("모든 파일", "*.*")],
-        )
-        if path:
-            bg_var.set(path)
-            request_preview()
-
-    def clear_background():
-        bg_var.set("")
-        request_preview()
-
+    # ── 데이터 표시 ──
     def _set_text(widget, content):
-        """읽기 전용 Text 갱신 (disabled 상태라 선택/복사는 가능)."""
         widget.configure(state="normal")
         widget.delete("1.0", "end")
         widget.insert("1.0", content)
-        widget.mark_set("insert", "1.0")
         widget.configure(state="disabled")
 
     def fill_data(meals, timetable):
@@ -387,6 +227,7 @@ def show_app(on_save=None) -> bool:
         meals, timetable = cached_display_data()
         fill_data(meals, timetable)
 
+    # ── 무거운 작업 ──
     def worker(apply=False):
         if state["busy"]:
             return
@@ -413,24 +254,26 @@ def show_app(on_save=None) -> bool:
                                 detail += ")"
                                 message = f"배경화면 적용 완료{detail}{offline_suffix}"
                             else:
-                                message = f"이미지 저장 완료, OS 적용 실패: {result.get('detail') or result.get('path')}{offline_suffix}"
-                            status_var.set(message)
+                                message = (f"이미지 저장 완료, OS 적용 실패: "
+                                           f"{result.get('detail') or result.get('path')}{offline_suffix}")
+                            set_status(message)
                         except Exception as e:
-                            status_var.set(f"배경화면 적용 실패: {e}")
+                            set_status(f"배경화면 적용 실패: {e}")
                         finally:
                             set_busy(False)
+                            last_var.set(last_render_label())
                     ui_after(apply_on_main)
                 else:
-                    message = f"배경화면 재생성 완료: {path}{offline_suffix}"
-                    ui_after(status_var.set, message)
+                    ui_after(set_status, f"배경화면 재생성 완료{offline_suffix}")
                     ui_after(set_busy, False)
+                    ui_after(last_var.set, last_render_label())
 
                 ui_after(fill_data, meals, timetable)
                 ui_after(path_var.set, path)
                 ui_after(request_preview)
             except Exception as e:
                 config.log(f"앱 UI 작업 실패: {e!r}")
-                ui_after(status_var.set, f"{action_label} 실패: {e}")
+                ui_after(set_status, f"{action_label} 실패: {e}")
                 ui_after(set_busy, False)
         threading.Thread(target=run, daemon=True).start()
 
@@ -447,213 +290,345 @@ def show_app(on_save=None) -> bool:
                 timetable = fetch_timetable.fetch_today(snapshot)
                 offline = meals.get("_cached") or timetable.get("_cached")
                 ui_after(fill_data, meals, timetable)
-                ui_after(status_var.set,
+                ui_after(set_status,
                          "오프라인 — 마지막으로 받은 데이터 표시 중" if offline else "최신 급식·시간표 불러옴")
                 ui_after(request_preview)
             except Exception as e:
                 config.log(f"데이터 갱신 실패: {e!r}")
-                ui_after(status_var.set, f"데이터 갱신 실패: {e}")
+                ui_after(set_status, f"데이터 갱신 실패: {e}")
             finally:
                 ui_after(set_busy, False, None, "wallpaper")
         threading.Thread(target=run, daemon=True).start()
 
     # ── 바탕화면 라이브 미리보기 (캐시 데이터 + 현재 설정으로 렌더) ──
-    preview = {"busy": False, "pending": False, "token": 0, "job": None,
-               "photo": None, "item": None}
+    preview = {"busy": False, "pending": False, "token": 0, "job": None, "image": None}
 
     def request_preview(delay=200):
         if preview["job"]:
-            root.after_cancel(preview["job"])
+            try:
+                root.after_cancel(preview["job"])
+            except (ValueError, tk.TclError):
+                pass
         preview["job"] = root.after(delay, start_preview)
 
     def start_preview():
         preview["job"] = None
-        if not preview_canvas.winfo_exists():
+        if not preview_holder.winfo_exists():
             return
         if preview["busy"]:
             preview["pending"] = True
             return
-        cw = max(1, preview_canvas.winfo_width())
-        ch = max(1, preview_canvas.winfo_height())
-        pw = cw - 16
+        cw = max(1, preview_holder.winfo_width())
+        ch = max(1, preview_holder.winfo_height())
+        pw = cw - 2 * SPACE["sm"]
         ph = round(pw * 9 / 16)
-        if ph > ch - 16:
-            ph = ch - 16
+        if ph > ch - 2 * SPACE["sm"]:
+            ph = ch - 2 * SPACE["sm"]
             pw = round(ph * 16 / 9)
         pw, ph = max(64, pw), max(36, ph)
-        ox, oy = (cw - pw) // 2, (ch - ph) // 2
         snapshot = current_config()
         meals, timetable = cached_display_data()
         preview["busy"] = True
         preview["token"] += 1
         token = preview["token"]
-        size = (pw, ph)
+        # 실제 픽셀보다 크게 렌더한 뒤 CTkImage 가 줄이도록 해서 선명도를 얻는다
+        render_size = (pw * PREVIEW_SUPERSAMPLE, ph * PREVIEW_SUPERSAMPLE)
 
         def run():
             try:
-                img = render.render_wallpaper_image(meals, timetable, snapshot, size=size).convert("RGB")
+                img = render.render_wallpaper_image(
+                    meals, timetable, snapshot, size=render_size).convert("RGB")
             except Exception as e:
                 config.log(f"미리보기 렌더 실패: {e!r}")
                 ui_after(finish_preview, token, None, 0, 0)
                 return
-            ui_after(finish_preview, token, img, ox, oy)
+            ui_after(finish_preview, token, img, pw, ph)
         threading.Thread(target=run, daemon=True).start()
 
-    def finish_preview(token, img, ox, oy):
+    def finish_preview(token, img, pw, ph):
         preview["busy"] = False
-        if preview_canvas.winfo_exists() and img is not None and token == preview["token"]:
-            preview["photo"] = ImageTk.PhotoImage(img)
-            if preview["item"] is None:
-                preview["item"] = preview_canvas.create_image(ox, oy, image=preview["photo"], anchor="nw")
-            else:
-                preview_canvas.itemconfigure(preview["item"], image=preview["photo"])
-                preview_canvas.coords(preview["item"], ox, oy)
+        if preview_label.winfo_exists() and img is not None and token == preview["token"]:
+            # CTkImage 는 참조를 잡아 둬야 GC 되지 않는다
+            preview["image"] = ctk.CTkImage(light_image=img, dark_image=img, size=(pw, ph))
+            preview_label.configure(image=preview["image"], text="")
         if preview["pending"]:
             preview["pending"] = False
             request_preview(50)
 
-    outer = tk.Frame(root)
-    outer.pack(fill="both", expand=True, padx=18, pady=18)
-    remember(outer, "panel")
+    # ── 설정 조작 ──
+    def choose_background():
+        path = filedialog.askopenfilename(
+            title="배경 이미지 선택",
+            filetypes=[("이미지", "*.png *.jpg *.jpeg *.bmp"), ("모든 파일", "*.*")],
+        )
+        if path:
+            bg_var.set(path)
+            bg_path_var.set(os.path.basename(path))
+            request_preview()
 
-    header = tk.Frame(outer)
-    header.pack(fill="x", pady=(0, 12))
-    remember(header, "panel")
-    title = tk.Label(header, text="하태욱 프로그램", font=_font(22, "bold"), anchor="w")
-    title.pack(side="left")
-    remember(title, "label")
-    custom_button = ThemedButton(header, "사진추가", show_custom_editor, font=_font(12, "bold"))
-    custom_button.pack(side="right", padx=(8, 0))
-    buttons.append(custom_button)
-    status = tk.Label(header, textvariable=status_var, font=_font(12), anchor="e",
-                      justify="right", wraplength=520)
-    status.pack(side="right")
-    remember(status, "dim")
-
-    body = tk.Frame(outer)
-    body.pack(fill="both", expand=True)
-    remember(body, "panel")
-
-    left = tk.Frame(body)
-    left.pack(side="left", fill="y", padx=(0, 14))
-    remember(left, "panel")
-    right = tk.Frame(body)
-    right.pack(side="left", fill="both", expand=True)
-    remember(right, "panel")
-
-    control = section(left, "설정")
-    control.pack(fill="x")
-
-    def row(parent, text):
-        f = tk.Frame(parent)
-        f.pack(fill="x", padx=10, pady=6)
-        remember(f, "panel")
-        l = tk.Label(f, text=text, width=13, anchor="w", font=_font(12))
-        l.pack(side="left")
-        remember(l, "label")
-        return f
-
-    class_row = row(control, "반")
-    class_menu = tk.OptionMenu(class_row, class_var, "1-1", "1-2", "1-3", "1-4",
-                               command=lambda _: request_preview())
-    class_menu.pack(side="left", fill="x", expand=True)
-    option_menus.append(class_menu)
-
-    def on_theme_change(_value):
-        style_all()
+    def clear_background():
+        bg_var.set("")
+        bg_path_var.set("선택 안 함")
         request_preview()
 
-    theme_row = row(control, "생긴거")
-    theme_menu = tk.OptionMenu(theme_row, theme_var, *theme_labels.keys(), command=on_theme_change)
-    theme_menu.pack(side="left", fill="x", expand=True)
-    option_menus.append(theme_menu)
+    def on_theme_change(_value=None):
+        request_preview()  # 앱 크롬은 그대로, 미리보기만 다시 그린다
 
-    bg_row = row(control, "배경 이미지")
-    bg_label = tk.Label(bg_row, textvariable=bg_var, width=24, anchor="w", font=_font(10))
-    bg_label.pack(side="left", fill="x", expand=True)
-    remember(bg_label, "dim")
+    def open_teacher_roster():
+        def saved(names):
+            cfg.update(config.load_config())
+            set_status(f"교사 명단 저장됨 ({len(names)}명)")
+            fill_cached_data()
+            request_preview()
+        dialogs.open_teacher_roster(root, on_saved=saved)
 
-    bg_buttons = tk.Frame(control)
-    bg_buttons.pack(fill="x", padx=10, pady=(0, 8))
-    remember(bg_buttons, "panel")
-    for text, cmd in (("찾기", choose_background), ("지움", clear_background)):
-        b = ThemedButton(bg_buttons, text, cmd, font=_font(12))
-        b.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        buttons.append(b)
+    def open_timetable_editor():
+        _meals, timetable = cached_display_data()
 
-    teacher_button = ThemedButton(control, "교사 명단 (이름 가림 해제)", edit_teacher_names, font=_font(12))
-    teacher_button.pack(fill="x", padx=10, pady=(0, 8))
-    buttons.append(teacher_button)
+        def saved(_timetable):
+            fill_cached_data()
+            request_preview(30)
+            set_status("시간표를 직접 수정했습니다 — 배경화면 적용을 눌러야 완전히 반영됩니다")
+        dialogs.open_timetable_editor(root, timetable, on_saved=saved)
 
-    auto = tk.Checkbutton(control, text="시작 시 자동 실행", variable=auto_var, font=_font(12), anchor="w")
-    auto.pack(fill="x", padx=10, pady=(0, 10))
-    remember(auto, "label")
+    # ── 위젯 헬퍼 ──
+    def nav_button(parent, key, label):
+        button = ctk.CTkButton(
+            parent, text=label, command=lambda: show_page(key), anchor="w",
+            height=38, corner_radius=RADIUS["sm"], fg_color="transparent",
+            hover_color=COLORS["nav_hover"], text_color=COLORS["text_dim"],
+            font=_font(TYPE["body"]),
+        )
+        button.pack(fill="x", padx=SPACE["sm"], pady=2)
+        nav_buttons[key] = button
+        return button
 
-    action = section(left, "배경화면")
-    action.pack(fill="x", pady=(14, 0))
-    for text, cmd in (
-        ("설정 저장", save_config),
-        ("배경화면 재생성", lambda: worker(False)),
-        ("배경화면 적용", lambda: worker(True)),
-    ):
-        b = ThemedButton(action, text, cmd, font=_font(13, "bold"))
-        b.pack(fill="x", padx=10, pady=5)
-        buttons.append(b)
-        if text != "설정 저장":
-            wallpaper_buttons.append(b)
+    def primary_button(parent, text, command, **kw):
+        opts = dict(text=text, command=command, height=38, corner_radius=RADIUS["sm"],
+                    font=_font(TYPE["body"], "bold"), fg_color=COLORS["accent"],
+                    hover_color=COLORS["accent_hover"])
+        opts.update(kw)
+        return ctk.CTkButton(parent, **opts)
 
-    info = section(left, "파일")
-    info.pack(fill="x", pady=(14, 0))
-    path_var = tk.StringVar(value=config.WALLPAPER_PATH)
-    path_label = tk.Label(info, textvariable=path_var, wraplength=300, justify="left", font=_font(10), anchor="w")
-    path_label.pack(fill="x", padx=10, pady=10)
-    remember(path_label, "dim")
+    def secondary_button(parent, text, command, **kw):
+        opts = dict(text=text, command=command, height=38, corner_radius=RADIUS["sm"],
+                    font=_font(TYPE["body"]), fg_color="transparent",
+                    hover_color=COLORS["nav_hover"], text_color=COLORS["text"],
+                    border_width=1, border_color=COLORS["border"])
+        opts.update(kw)
+        return ctk.CTkButton(parent, **opts)
 
-    preview_panel = section(right, "바탕화면 미리보기")
-    preview_panel.pack(fill="both", expand=True, pady=(0, 14))
-    preview_canvas = tk.Canvas(preview_panel, highlightthickness=1, borderwidth=0)
-    preview_canvas.pack(fill="both", expand=True, padx=10, pady=(4, 10))
-    preview_canvas.bind("<Configure>", lambda _e: request_preview(120))
-    remember(preview_canvas, "canvas")
+    def settings_card(parent, title):
+        outer = card(parent)
+        outer.pack(fill="x", pady=(0, SPACE["md"]))
+        section_label(outer, title).pack(fill="x", padx=SPACE["md"],
+                                         pady=(SPACE["md"], SPACE["xs"]))
+        inner = ctk.CTkFrame(outer, fg_color="transparent")
+        inner.pack(fill="x", padx=SPACE["md"], pady=(0, SPACE["md"]))
+        return inner
 
-    data = tk.Frame(right)
-    data.pack(fill="both", expand=True)
-    remember(data, "panel")
-    tt_panel = section(data, "시간표")
-    tt_panel.pack(side="left", fill="both", expand=True, padx=(0, 7))
-    meal_panel = section(data, "급식")
-    meal_panel.pack(side="left", fill="both", expand=True, padx=(7, 0))
+    def settings_row(parent, label):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=SPACE["xs"])
+        ctk.CTkLabel(row, text=label, width=110, anchor="w",
+                     font=_font(TYPE["body"])).pack(side="left")
+        return row
 
-    timetable_text = tk.Text(tt_panel, height=9, font=_font(11), relief="flat", wrap="word",
-                             borderwidth=0, state="disabled")
-    timetable_text.pack(fill="both", expand=True, padx=10, pady=(10, 4))
-    remember(timetable_text, "alt")
+    # ══ 레이아웃 ══
+    root.grid_columnconfigure(1, weight=1)
+    root.grid_rowconfigure(0, weight=1)
 
-    tt_btn_frame = tk.Frame(tt_panel)
-    tt_btn_frame.pack(fill="x", side="bottom", padx=10, pady=(0, 10))
-    remember(tt_btn_frame, "panel")
+    # ── 사이드바 ──
+    sidebar = ctk.CTkFrame(root, width=212, corner_radius=0,
+                           fg_color=COLORS["sidebar"], border_width=0)
+    sidebar.grid(row=0, column=0, sticky="nsew")
+    sidebar.grid_propagate(False)
 
-    edit_tt_btn = ThemedButton(tt_btn_frame, "시간표 편집", edit_dashboard_timetable, font=_font(11, "bold"))
-    edit_tt_btn.pack(side="right")
-    buttons.append(edit_tt_btn)
-    meal_text = tk.Text(meal_panel, height=9, font=_font(11), relief="flat", wrap="word",
-                        borderwidth=0, state="disabled")
-    meal_text.pack(fill="both", expand=True, padx=10, pady=10)
-    remember(meal_text, "alt")
+    brand = ctk.CTkFrame(sidebar, fg_color="transparent")
+    brand.pack(fill="x", padx=SPACE["md"], pady=(SPACE["lg"], SPACE["lg"]))
+    ctk.CTkLabel(brand, text="하태욱 프로그램", anchor="w",
+                 font=_font(TYPE["title"], "bold")).pack(fill="x")
+    ctk.CTkLabel(brand, text="인천과학고 급식·시간표", anchor="w",
+                 font=_font(TYPE["caption"]),
+                 text_color=COLORS["text_dim"]).pack(fill="x", pady=(1, 0))
 
+    nav = ctk.CTkFrame(sidebar, fg_color="transparent")
+    nav.pack(fill="x")
+    for key, label in NAV_ITEMS:
+        nav_button(nav, key, label)
+
+    footer = ctk.CTkFrame(sidebar, fg_color="transparent")
+    footer.pack(side="bottom", fill="x", padx=SPACE["md"], pady=SPACE["md"])
+    ctk.CTkLabel(footer, textvariable=last_var, anchor="w", font=_font(TYPE["caption"]),
+                 text_color=COLORS["text_dim"]).pack(fill="x")
+    ctk.CTkLabel(footer, textvariable=status_var, anchor="w", justify="left",
+                 wraplength=180, font=_font(TYPE["caption"]),
+                 text_color=COLORS["text_dim"]).pack(fill="x", pady=(SPACE["xs"], 0))
+
+    # ── 콘텐츠 ──
+    content = ctk.CTkFrame(root, fg_color="transparent")
+    content.grid(row=0, column=1, sticky="nsew")
+    content.grid_rowconfigure(0, weight=1)
+    content.grid_columnconfigure(0, weight=1)
+    # 모든 페이지를 같은 셀에 미리 grid 한 뒤 감춰 둔다.
+    # grid() 를 한 번도 안 한 위젯에는 grid_remove() 가 아무 일도 하지 않아
+    # 페이지가 서로 겹쳐 보이게 된다.
+    for key, _label in NAV_ITEMS:
+        pages[key] = ctk.CTkFrame(content, fg_color="transparent")
+        pages[key].grid(row=0, column=0, sticky="nsew")
+        pages[key].grid_remove()
+
+    # ── 홈 ──
+    home = pages["home"]
+    home.grid_columnconfigure(0, weight=1)
+    home.grid_rowconfigure(0, weight=3)
+    home.grid_rowconfigure(1, weight=2)
+
+    preview_card = card(home)
+    preview_card.grid(row=0, column=0, sticky="nsew",
+                      padx=SPACE["lg"], pady=(SPACE["lg"], SPACE["md"]))
+    preview_card.grid_columnconfigure(0, weight=1)
+    preview_card.grid_rowconfigure(1, weight=1)
+    section_label(preview_card, "바탕화면 미리보기").grid(
+        row=0, column=0, sticky="ew", padx=SPACE["md"], pady=(SPACE["md"], SPACE["xs"]))
+    preview_holder = ctk.CTkFrame(preview_card, fg_color=COLORS["canvas"],
+                                  corner_radius=RADIUS["sm"])
+    preview_holder.grid(row=1, column=0, sticky="nsew",
+                        padx=SPACE["md"], pady=(0, SPACE["md"]))
+    preview_holder.bind("<Configure>", lambda _e: request_preview(120))
+    preview_label = ctk.CTkLabel(preview_holder, text="미리보기 준비 중...",
+                                 font=_font(TYPE["caption"]),
+                                 text_color=COLORS["text_dim"])
+    preview_label.place(relx=0.5, rely=0.5, anchor="center")
+
+    data_row = ctk.CTkFrame(home, fg_color="transparent")
+    data_row.grid(row=1, column=0, sticky="nsew", padx=SPACE["lg"])
+    data_row.grid_columnconfigure((0, 1), weight=1)
+    data_row.grid_rowconfigure(0, weight=1)
+
+    tt_card = card(data_row)
+    tt_card.grid(row=0, column=0, sticky="nsew", padx=(0, SPACE["sm"]))
+    tt_card.grid_columnconfigure(0, weight=1)
+    tt_card.grid_rowconfigure(1, weight=1)
+    tt_head = ctk.CTkFrame(tt_card, fg_color="transparent")
+    tt_head.grid(row=0, column=0, sticky="ew", padx=SPACE["md"],
+                 pady=(SPACE["md"], SPACE["xs"]))
+    section_label(tt_head, "시간표").pack(side="left")
+    edit_tt_button = ctk.CTkButton(
+        tt_head, text="편집", command=open_timetable_editor, width=56, height=26,
+        corner_radius=RADIUS["sm"], font=_font(TYPE["caption"]),
+        fg_color="transparent", hover_color=COLORS["nav_hover"],
+        text_color=COLORS["accent"], border_width=1, border_color=COLORS["border"])
+    edit_tt_button.pack(side="right")
+    all_buttons.append(edit_tt_button)
+    timetable_text = ctk.CTkTextbox(tt_card, font=mono_font(TYPE["mono"]), wrap="word",
+                                    fg_color=COLORS["surface_alt"], border_width=0,
+                                    corner_radius=RADIUS["sm"], activate_scrollbars=True)
+    timetable_text.grid(row=1, column=0, sticky="nsew", padx=SPACE["md"],
+                        pady=(0, SPACE["md"]))
+    timetable_text.configure(state="disabled")
+
+    meal_card = card(data_row)
+    meal_card.grid(row=0, column=1, sticky="nsew", padx=(SPACE["sm"], 0))
+    meal_card.grid_columnconfigure(0, weight=1)
+    meal_card.grid_rowconfigure(1, weight=1)
+    section_label(meal_card, "급식").grid(row=0, column=0, sticky="ew", padx=SPACE["md"],
+                                         pady=(SPACE["md"], SPACE["xs"]))
+    meal_text = ctk.CTkTextbox(meal_card, font=mono_font(TYPE["mono"]), wrap="word",
+                               fg_color=COLORS["surface_alt"], border_width=0,
+                               corner_radius=RADIUS["sm"], activate_scrollbars=True)
+    meal_text.grid(row=1, column=0, sticky="nsew", padx=SPACE["md"], pady=(0, SPACE["md"]))
+    meal_text.configure(state="disabled")
+
+    actions = ctk.CTkFrame(home, fg_color="transparent")
+    actions.grid(row=2, column=0, sticky="ew", padx=SPACE["lg"],
+                 pady=(SPACE["md"], SPACE["lg"]))
+    apply_button = primary_button(actions, "배경화면 적용", lambda: worker(True), width=150)
+    apply_button.pack(side="right")
+    regen_button = secondary_button(actions, "다시 만들기", lambda: worker(False), width=120)
+    regen_button.pack(side="right", padx=(0, SPACE["sm"]))
+    for button in (apply_button, regen_button):
+        all_buttons.append(button)
+        action_buttons.append(button)
+    ctk.CTkLabel(actions, textvariable=path_var, anchor="w", font=_font(TYPE["caption"]),
+                 text_color=COLORS["text_dim"]).pack(side="left", fill="x", expand=True)
+
+    # ── 설정 ──
+    # 설정은 읽기 좋은 폭으로 묶어 왼쪽에 세운다 (창을 넓혀도 컨트롤이 늘어나지 않게).
+    settings_page = ctk.CTkScrollableFrame(pages["settings"], fg_color="transparent",
+                                           width=560)
+    settings_page.pack(side="left", fill="y", expand=False,
+                       padx=SPACE["lg"], pady=SPACE["lg"])
+
+    class_box = settings_card(settings_page, "학급")
+    class_row = settings_row(class_box, "반")
+    ctk.CTkOptionMenu(class_row, variable=class_var, values=["1-1", "1-2", "1-3", "1-4"],
+                      command=lambda _v: request_preview(), width=140,
+                      font=_font(TYPE["body"]), corner_radius=RADIUS["sm"],
+                      fg_color=COLORS["surface_alt"], button_color=COLORS["border"],
+                      button_hover_color=COLORS["nav_hover"],
+                      text_color=COLORS["text"]).pack(side="left")
+
+    look_box = settings_card(settings_page, "바탕화면 모양")
+    ctk.CTkSegmentedButton(
+        look_box, values=list(theme_labels.keys()), variable=theme_var,
+        command=on_theme_change, font=_font(TYPE["body"]), corner_radius=RADIUS["sm"],
+        selected_color=COLORS["accent"], selected_hover_color=COLORS["accent_hover"],
+        unselected_color=COLORS["surface_alt"], unselected_hover_color=COLORS["nav_hover"],
+        text_color=COLORS["text"],
+    ).pack(fill="x", pady=(0, SPACE["sm"]))
+
+    bg_path_var = tk.StringVar(value=os.path.basename(bg_var.get()) or "선택 안 함")
+    bg_row = settings_row(look_box, "배경 이미지")
+    ctk.CTkLabel(bg_row, textvariable=bg_path_var, anchor="w", font=_font(TYPE["caption"]),
+                 text_color=COLORS["text_dim"]).pack(side="left", fill="x", expand=True)
+    for text, cmd in (("지움", clear_background), ("찾기", choose_background)):
+        button = secondary_button(bg_row, text, cmd, width=64, height=30)
+        button.pack(side="right", padx=(SPACE["xs"], 0))
+        all_buttons.append(button)
+
+    refresh_box = settings_card(settings_page, "자동 갱신")
+    interval_row = settings_row(refresh_box, "갱신 주기")
+    ctk.CTkOptionMenu(interval_row, variable=interval_var,
+                      values=[config.REFRESH_INTERVAL_LABELS[m]
+                              for m in config.VALID_REFRESH_INTERVALS],
+                      width=140, font=_font(TYPE["body"]), corner_radius=RADIUS["sm"],
+                      fg_color=COLORS["surface_alt"], button_color=COLORS["border"],
+                      button_hover_color=COLORS["nav_hover"],
+                      text_color=COLORS["text"]).pack(side="left")
+    ctk.CTkLabel(
+        refresh_box,
+        text="'끔'으로 둬도 날짜가 바뀌거나 절전에서 깨어나면 한 번 갱신합니다.\n"
+             "어제 급식이 그대로 남아 있는 걸 막기 위한 최소 동작입니다.",
+        anchor="w", justify="left", height=40, font=_font(TYPE["caption"]),
+        text_color=COLORS["text_dim"]).pack(fill="x", pady=(SPACE["xs"], 0))
+
+    misc_box = settings_card(settings_page, "기타")
+    teacher_button = secondary_button(misc_box, "교사 명단 (이름 가림 해제)",
+                                      open_teacher_roster)
+    teacher_button.pack(fill="x", pady=(0, SPACE["sm"]))
+    all_buttons.append(teacher_button)
+    ctk.CTkSwitch(misc_box, text="컴퓨터 시작 시 자동 실행", variable=auto_var,
+                  onvalue=True, offvalue=False, font=_font(TYPE["body"]),
+                  progress_color=COLORS["accent"]).pack(fill="x", pady=SPACE["xs"])
+
+    save_button = primary_button(settings_page, "설정 저장", save_settings, width=140)
+    save_button.pack(anchor="e", pady=(SPACE["sm"], 0))
+    all_buttons.append(save_button)
+
+    # ── 단축키 ──
     def on_save_shortcut(_event):
         if not state["busy"]:
-            save_config()
+            save_settings()
         return "break"
 
     root.bind("<Command-s>", on_save_shortcut)
     root.bind("<Control-s>", on_save_shortcut)
 
-    style_all()
+    show_page("home")
     fill_cached_data()
     root.after(25, pump_ui_queue)
     root.after(600, refresh_data)  # 시작하자마자 최신 급식·시간표를 백그라운드로
-    root.eval("tk::PlaceWindow . center")
     root.mainloop()
     return saved["ok"]
 

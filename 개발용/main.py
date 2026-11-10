@@ -3,10 +3,12 @@
 
 흐름: 중복 실행 방지 → (최초 실행 시 설정창) → 인터넷 대기 → fetch → 렌더 →
 바탕화면 적용 → 트레이 상주 (지금 갱신 / 설정 / 종료).
-갱신은 부팅 시 1회가 기본이며 주기적 갱신은 하지 않는다.
+부팅 시 1회 갱신한 뒤 scheduler.RefreshScheduler 가 백그라운드로 이어받는다:
+날짜 변경(자정 넘김), 절전 해제, 설정한 주기, 실패 시 backoff 재시도.
 """
 import os
 import argparse
+import hashlib
 import subprocess
 import sys
 import threading
@@ -26,6 +28,7 @@ import config
 import fetch_meal
 import fetch_timetable
 import render
+import scheduler
 import settings_ui
 import wallpaper
 
@@ -67,28 +70,69 @@ def wait_for_internet() -> bool:
 
 _update_lock = threading.Lock()
 
+APPLIED_DIGEST_KEY = "applied_wallpaper_sha256"
 
-def update(apply_wallpaper: bool = True) -> str | None:
+
+def _file_digest(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return ""
+
+
+def update_ex(apply_wallpaper: bool = True, force: bool = False) -> tuple[str, str | None]:
+    """갱신 1회. 반환: (상태, 이미지 경로).
+
+    상태: "ok" | "skipped"(내용 동일해 재적용 생략) | "failed" | "busy"(이미 갱신 중).
+    스케줄러가 성공/실패/무시를 구분해야 해서 update() 대신 이쪽을 쓴다.
+    """
     if not _update_lock.acquire(blocking=False):
-        return None  # 이미 갱신 중
+        return "busy", None
     try:
         cfg = config.load_config()
         config.log(f"갱신 시작 (반: {cfg.get('grade')}-{cfg.get('class_num')})")
         meals = fetch_meal.fetch_meals(cfg)
         timetable = fetch_timetable.fetch_today(cfg)
         path = render.render_wallpaper(meals, timetable, cfg)
-        if apply_wallpaper:
-            if not wallpaper.set_wallpaper(path):
-                config.log(f"바탕화면 적용 없이 이미지 생성까지만 완료: {path}")
-        else:
+
+        if not apply_wallpaper:
             config.log(f"이미지 생성까지만 완료: {path}")
+            return "ok", path
+
+        digest = _file_digest(path)
+        if not force and digest and digest == config.load_cache().get(APPLIED_DIGEST_KEY):
+            # 렌더 결과가 직전과 같으면 다시 적용하지 않는다. macOS 는 적용할 때마다
+            # 새 사본을 만들고 화면이 한 번 깜빡인다(wallpaper._macos_live_path 참고).
+            # 주기 갱신이 켜져 있어도 조용히 지나가게 하는 부분.
+            config.log("바탕화면 내용 변화 없음 — 재적용 생략")
+            return "skipped", path
+
+        if wallpaper.set_wallpaper(path):
+            if digest:
+                config.save_cache_entry(APPLIED_DIGEST_KEY, digest)
+        else:
+            # 다이제스트를 저장하지 않아 다음 주기에 적용을 다시 시도한다.
+            config.log(f"바탕화면 적용 없이 이미지 생성까지만 완료: {path}")
         config.log("갱신 완료")
-        return path
+        return "ok", path
     except Exception as e:
         config.log(f"갱신 실패: {e!r}")
-        return None
+        return "failed", None
     finally:
         _update_lock.release()
+
+
+def update(apply_wallpaper: bool = True, force: bool = False) -> str | None:
+    return update_ex(apply_wallpaper, force)[1]
+
+
+def _scheduled_refresh():
+    """스케줄러 콜백. True=성공, False=실패, None=이미 갱신 중."""
+    status, _path = update_ex(apply_wallpaper=True, force=False)
+    if status == "busy":
+        return None
+    return status in ("ok", "skipped")
 
 
 def make_tray_icon():
@@ -119,15 +163,32 @@ def _settings_command() -> list:
     return [sys.executable, script, "--ui"]
 
 
-def run_tray() -> None:
+def run_tray(boot_success: bool = True) -> None:
     import pystray
 
+    sched = scheduler.RefreshScheduler(_scheduled_refresh)
+    sched.seed(boot_success)  # 부팅 직후 main()이 이미 갱신했으므로 즉시 재갱신하지 않는다
+
+    def refresh_menu(icon):
+        try:
+            icon.update_menu()
+        except Exception:
+            pass  # 메뉴 라벨 갱신 실패는 기능에 영향이 없다
+
     def on_update(icon, item):
-        threading.Thread(target=update, daemon=True).start()
+        def run():
+            # 수동 갱신은 내용이 같아도 강제로 다시 적용한다
+            # (사용자가 바탕화면을 직접 바꿨을 수 있다).
+            status, _path = update_ex(apply_wallpaper=True, force=True)
+            if status != "busy":
+                sched.seed(status in ("ok", "skipped"))
+            refresh_menu(icon)
+        threading.Thread(target=run, daemon=True).start()
 
     def on_settings(icon, item):
         # Tk는 메인 스레드에서만 안전하므로 설정 창은 별도 프로세스로 연다.
         # (트레이 스레드에서 tk.Tk()를 만들면 macOS에서 회색 화면으로 멈춘다)
+        # 설정 창에서 바꾼 자동 갱신 주기는 config.json 을 통해 스케줄러가 매 tick 다시 읽는다.
         def open_and_apply():
             try:
                 subprocess.run(_settings_command(), check=False)
@@ -135,10 +196,14 @@ def run_tray() -> None:
                 config.log(f"설정 창 실행 실패: {e!r}")
                 return
             icon.icon = make_tray_icon()
-            update()
+            status, _path = update_ex(apply_wallpaper=True, force=True)
+            if status != "busy":
+                sched.seed(status in ("ok", "skipped"))
+            refresh_menu(icon)
         threading.Thread(target=open_and_apply, daemon=True).start()
 
     def on_quit(icon, item):
+        sched.stop()
         icon.stop()
 
     icon = pystray.Icon(
@@ -146,11 +211,15 @@ def run_tray() -> None:
         make_tray_icon(),
         "하태욱 프로그램 — 인천과학고",
         menu=pystray.Menu(
+            pystray.MenuItem(lambda item: sched.last_success_label(),
+                             lambda icon, item: None, enabled=False),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("지금 갱신", on_update),
             pystray.MenuItem("설정", on_settings),
             pystray.MenuItem("종료", on_quit),
         ),
     )
+    sched.start()
     icon.run()
 
 
@@ -196,12 +265,14 @@ def main() -> None:
 
     if not wait_for_internet():
         config.log("인터넷 연결 실패 — 캐시로 갱신 시도")
-    path = update(apply_wallpaper=not (args.render_only or args.no_wallpaper))
+    # 부팅 시에는 항상 강제 적용한다. 사용자가 그동안 바탕화면을 직접 바꿨을 수 있다.
+    status, path = update_ex(apply_wallpaper=not (args.render_only or args.no_wallpaper),
+                             force=True)
     if args.render_only or args.once:
         if path:
             print(path)
         return
-    run_tray()
+    run_tray(boot_success=status in ("ok", "skipped"))
 
 
 if __name__ == "__main__":

@@ -1,70 +1,47 @@
 # -*- coding: utf-8 -*-
-"""앱 UI와 커스텀 에디터가 함께 쓰는 테마 공통 코드.
+"""앱 UI 디자인 토큰.
 
-macOS의 Aqua tk.Button은 bg/fg 설정을 무시해 테마 색이 깨지므로,
-모든 버튼은 Label 기반 ThemedButton으로 그린다.
+앱 창의 외관은 바탕화면 테마(흑백/백흑/감성/컴퓨터)와 분리되어 있다.
+바탕화면은 레트로 터미널 그대로 두고, 앱 창은 시스템 라이트/다크를 따르는
+중립적인 모습 하나만 쓴다. 바탕화면 테마 색은 render.THEMES 가 갖고 있다.
+
+색은 모두 (라이트, 다크) 튜플이다 — CustomTkinter 가 그대로 받는 형식.
 """
 import os
 import sys
-import tkinter as tk
+
+import customtkinter as ctk
 
 import config
 
-PALETTES = {
-    "black_on_white": {
-        "theme_name": "black_on_white",
-        "bg": "#ffffff",
-        "panel": "#ffffff",
-        "panel_alt": "#f4f4f4",
-        "fg": "#000000",
-        "dim": "#666666",
-        "border": "#000000",
-        "accent": "#000000",
-        "button_fg": "#ffffff",
-        "canvas_bg": "#f2f2f2",
-    },
-    "white_on_black": {
-        "theme_name": "white_on_black",
-        "bg": "#000000",
-        "panel": "#000000",
-        "panel_alt": "#101010",
-        "fg": "#ffffff",
-        "dim": "#aaaaaa",
-        "border": "#ffffff",
-        "accent": "#ffffff",
-        "button_fg": "#000000",
-        "canvas_bg": "#111111",
-    },
-    "crayon_sketch": {
-        "theme_name": "crayon_sketch",
-        "bg": "#fdfbf7",
-        "panel": "#fdfbf7",
-        "panel_alt": "#f5f0e6",
-        "fg": "#2c2c2c",
-        "dim": "#7c7267",
-        "border": "#2c2c2c",
-        "accent": "#b27a12",
-        "button_fg": "#ffffff",
-        "canvas_bg": "#f5f0e6",
-    },
-    "cyber_terminal": {
-        "theme_name": "cyber_terminal",
-        "bg": "#0a100d",
-        "panel": "#0a100d",
-        "panel_alt": "#080c0a",
-        "fg": "#00ff66",
-        "dim": "#00a84f",
-        "border": "#00ff66",
-        "accent": "#ffb000",
-        "button_fg": "#0a100d",
-        "canvas_bg": "#080c0a",
-    },
+# ── 간격 / 반경 / 타이포 ──
+SPACE = {"xs": 4, "sm": 8, "md": 14, "lg": 20, "xl": 28}
+RADIUS = {"sm": 6, "md": 10, "lg": 14}
+TYPE = {"display": 22, "title": 15, "body": 13, "caption": 11, "mono": 12}
+
+# ── 색 ── (라이트, 다크)
+COLORS = {
+    "surface":      ("#ffffff", "#1c1c1e"),
+    "surface_alt":  ("#f4f4f7", "#2a2a2d"),
+    "sidebar":      ("#f0f0f4", "#151517"),
+    "border":       ("#dcdce2", "#3a3a3d"),
+    "text":         ("#111114", "#f2f2f7"),
+    "text_dim":     ("#6b6b73", "#9a9aa2"),
+    "accent":       ("#2563eb", "#3b82f6"),
+    "accent_hover": ("#1d4ed8", "#60a5fa"),
+    "nav_active":   ("#e2e8f8", "#2e3440"),
+    "nav_hover":    ("#e8e8ee", "#232326"),
+    "canvas":       ("#e6e6ec", "#242427"),
+    "ok":           ("#15803d", "#4ade80"),
+    "warn":         ("#b45309", "#fbbf24"),
+    "error":        ("#b91c1c", "#f87171"),
 }
 
 _FONT_REGISTERED = False
 
 
 def _register_windows_font():
+    """번들된 픽셀 폰트를 Windows 에 런타임 등록 (데이터 표시용 mono 폰트)."""
     global _FONT_REGISTERED
     if _FONT_REGISTERED or sys.platform != "win32":
         return
@@ -75,7 +52,17 @@ def _register_windows_font():
         _FONT_REGISTERED = True
 
 
-def font(size=13, weight="normal"):
+def font(size=TYPE["body"], weight="normal"):
+    """앱 크롬용 시스템 UI 폰트. 한글 자소가 온전한 것으로 고른다."""
+    if sys.platform == "win32":
+        return ("Malgun Gothic", size, weight)
+    if sys.platform == "darwin":
+        return ("Apple SD Gothic Neo", size, weight)
+    return ("Noto Sans CJK KR", size, weight)
+
+
+def mono_font(size=TYPE["mono"], weight="normal"):
+    """시간표·급식 표시용 고정폭 폰트. 줄 맞춤이 필요하고 레트로 정체성이 남는 곳."""
     if sys.platform == "win32":
         _register_windows_font()
         return ("NeoDunggeunmo", size, weight)
@@ -84,142 +71,38 @@ def font(size=13, weight="normal"):
     return ("DejaVu Sans Mono", size, weight)
 
 
+def resolve(token):
+    """(라이트, 다크) 색 튜플을 현재 모드의 hex 하나로 푼다.
+
+    tk.Canvas 처럼 CTk 색 튜플을 못 받는 곳에서 쓴다 (커스텀 에디터의 오버레이).
+    """
+    value = COLORS.get(token, token)
+    if isinstance(value, (tuple, list)):
+        return value[1] if ctk.get_appearance_mode().lower() == "dark" else value[0]
+    return value
+
+
 def theme_key(value):
-    return value if value in PALETTES else config.DEFAULT_UI_THEME
+    """바탕화면 테마 키를 유효한 값으로 정규화한다."""
+    return value if value in config.UI_THEMES else config.DEFAULT_UI_THEME
 
 
-def palette(value):
-    return PALETTES[theme_key(value)]
+def init_appearance():
+    """앱 창 외관을 시스템 라이트/다크에 맞춘다. 창을 만들기 전에 호출한다."""
+    ctk.set_appearance_mode("System")
+    ctk.set_default_color_theme("blue")
 
 
-class ThemedButton(tk.Frame):
-    """모든 OS에서 테마 색이 그대로 적용되는 평면 버튼 (hover/press/disabled 지원)."""
+def card(parent, **kw):
+    """테두리가 있는 패널. 창 안의 모든 구획은 이걸로 만든다."""
+    opts = dict(fg_color=COLORS["surface"], border_color=COLORS["border"],
+                border_width=1, corner_radius=RADIUS["md"])
+    opts.update(kw)
+    return ctk.CTkFrame(parent, **opts)
 
-    def __init__(self, parent, text, command, font=None, padx=12, pady=6):
-        super().__init__(parent, bd=0, highlightthickness=0)
-        self._command = command
-        self._palette = None
-        self._enabled = True
-        self._selected = False
-        self._hover = False
-        self._pressed = False
 
-        self.label = tk.Label(
-            self, text=text, font=font, padx=padx, pady=pady,
-            cursor="hand2", borderwidth=0, highlightthickness=0, takefocus=1
-        )
-        self.label.pack(fill="both", expand=True, padx=1, pady=1)
-
-        self.label.bind("<Enter>", self._on_enter)
-        self.label.bind("<Leave>", self._on_leave)
-        self.label.bind("<ButtonPress-1>", self._on_press)
-        self.label.bind("<ButtonRelease-1>", self._on_release)
-        self.label.bind("<Key-Return>", self._on_key_activate)
-        self.label.bind("<Key-space>", self._on_key_activate)
-        self.label.bind("<FocusIn>", lambda _event: self._refresh())
-        self.label.bind("<FocusOut>", lambda _event: self._refresh())
-
-    def cget(self, key):
-        if key == "text":
-            return self.label.cget("text")
-        elif key == "font":
-            return self.label.cget("font")
-        elif key == "fg" or key == "foreground":
-            return self.label.cget("fg")
-        elif key == "bg" or key == "background":
-            return self.label.cget("bg")
-        return super().cget(key)
-
-    def configure(self, cnf=None, **kw):
-        if cnf is not None:
-            if isinstance(cnf, dict):
-                kw.update(cnf)
-            else:
-                return super().configure(cnf)
-        
-        label_keys = {"text", "font", "fg", "foreground", "padx", "pady"}
-        label_kw = {k: v for k, v in kw.items() if k in label_keys}
-        frame_kw = {k: v for k, v in kw.items() if k not in label_keys}
-        
-        if label_kw:
-            self.label.configure(**label_kw)
-        if frame_kw:
-            super().configure(**frame_kw)
-
-    config = configure
-
-    def set_palette(self, p):
-        self._palette = p
-        self._refresh()
-
-    def set_enabled(self, enabled):
-        self._enabled = bool(enabled)
-        self.label.configure(cursor="hand2" if self._enabled else "arrow")
-        self._refresh()
-
-    def set_selected(self, selected):
-        self._selected = bool(selected)
-        self._refresh()
-
-    def _refresh(self):
-        p = self._palette
-        if not p or not self.winfo_exists():
-            return
-        if p.get("theme_name") == "cyber_terminal":
-            bg = p["panel"]
-            if not self._enabled:
-                fg = p["dim"]
-                border = "#550000"
-            elif self._selected or (self._pressed and self._hover):
-                fg = "#00ff66"
-                border = "#ff0000"
-            elif self._hover:
-                fg = "#00ff66"
-                border = "#ff3333"
-            else:
-                fg = "#00ff66"
-                border = "#ff0000"
-            
-            super().configure(bg=border)
-            self.label.configure(bg=bg, fg=fg)
-            return
-
-        if not self._enabled:
-            bg, fg = p["panel_alt"], p["dim"]
-        elif self._selected or (self._pressed and self._hover):
-            bg, fg = p["panel"], p["accent"]
-        elif self._hover:
-            bg, fg = p["dim"], p["button_fg"]
-        else:
-            bg, fg = p["accent"], p["button_fg"]
-            
-        super().configure(bg=p["border"])
-        self.label.configure(bg=bg, fg=fg)
-
-    def _on_enter(self, _event):
-        self._hover = True
-        self._refresh()
-
-    def _on_leave(self, _event):
-        self._hover = False
-        self._refresh()
-
-    def _on_press(self, _event):
-        if self._enabled:
-            self.label.focus_set()
-            self._pressed = True
-            self._refresh()
-
-    def _on_release(self, event):
-        was_pressed = self._pressed
-        self._pressed = False
-        self._refresh()
-        if not (self._enabled and was_pressed and self._command):
-            return
-        if 0 <= event.x <= self.label.winfo_width() and 0 <= event.y <= self.label.winfo_height():
-            self._command()
-
-    def _on_key_activate(self, _event):
-        if self._enabled and self._command:
-            self._command()
-        return "break"
+def section_label(parent, text, **kw):
+    opts = dict(text=text, font=font(TYPE["caption"], "bold"),
+                text_color=COLORS["text_dim"], anchor="w")
+    opts.update(kw)
+    return ctk.CTkLabel(parent, **opts)
